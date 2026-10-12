@@ -22,7 +22,7 @@ Claude Code asks for your Wheelhouse URL and an API key (stored in your OS keych
 /wheelhouse:setup <PROJECT_KEY>
 ```
 
-While this repo is private, adding the marketplace needs git access to it. From a local clone you can use `/plugin marketplace add /path/to/wheelhouse-cli` instead.
+You'll need a running Wheelhouse server to point it at. From a local clone you can also use `/plugin marketplace add /path/to/wheelhouse-cli`.
 
 ## Install the CLI
 
