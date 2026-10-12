@@ -1,0 +1,14 @@
+{
+  "name": "shipstack",
+  "description": "Shipstack plugins for Claude Code",
+  "owner": {
+    "name": "Shipstack"
+  },
+  "plugins": [
+    {
+      "name": "wheelhouse",
+      "source": "./plugin",
+      "description": "Keeps your Wheelhouse board and knowledge map in sync with what Claude changes."
+    }
+  ]
+}

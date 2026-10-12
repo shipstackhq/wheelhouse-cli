@@ -1,0 +1,43 @@
+{
+  "name": "wheelhouse",
+  "displayName": "Shipstack Wheelhouse",
+  "version": "0.1.0",
+  "description": "Keeps your Wheelhouse board and knowledge map in sync with what Claude actually changes: session briefing on start, tracked edits, and a reconciliation check before each turn ends.",
+  "author": {
+    "name": "Shipstack"
+  },
+  "homepage": "https://github.com/shipstackhq/wheelhouse-cli#readme",
+  "repository": "https://github.com/shipstackhq/wheelhouse-cli",
+  "keywords": [
+    "wheelhouse",
+    "kanban",
+    "knowledge-map",
+    "project-management"
+  ],
+  "license": "MIT",
+  "userConfig": {
+    "server_url": {
+      "type": "string",
+      "title": "Wheelhouse URL",
+      "description": "Base URL of your Wheelhouse server, e.g. https://wheelhouse.example.com",
+      "required": true,
+      "default": "http://localhost:3456"
+    },
+    "api_key": {
+      "type": "string",
+      "title": "Wheelhouse API key",
+      "description": "An agent key from Wheelhouse \u2192 Agents & API keys (starts with wh_)",
+      "required": true,
+      "sensitive": true
+    }
+  },
+  "mcpServers": {
+    "wheelhouse": {
+      "type": "http",
+      "url": "${user_config.server_url}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${user_config.api_key}"
+      }
+    }
+  }
+}

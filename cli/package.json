@@ -1,0 +1,39 @@
+{
+  "name": "@shipstack/wheelhouse-cli",
+  "version": "0.1.0",
+  "description": "CLI and Claude Code hook runner for Shipstack Wheelhouse: keeps the board and knowledge map in sync with your working copy.",
+  "type": "module",
+  "bin": {
+    "wheelhouse": "bin/wheelhouse.mjs"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "wheelhouse",
+    "shipstack",
+    "claude-code",
+    "mcp",
+    "kanban",
+    "cli"
+  ],
+  "license": "MIT",
+  "author": "Shipstack",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shipstackhq/wheelhouse-cli.git",
+    "directory": "cli"
+  },
+  "homepage": "https://github.com/shipstackhq/wheelhouse-cli#readme",
+  "bugs": {
+    "url": "https://github.com/shipstackhq/wheelhouse-cli/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

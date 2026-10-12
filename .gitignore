@@ -1,0 +1,4 @@
+node_modules/
+*.tgz
+.wheelhouse/
+.DS_Store
