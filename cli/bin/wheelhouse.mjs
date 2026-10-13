@@ -13,7 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const VERSION = "0.1.1";
+const VERSION = "0.1.2";
 const CONFIG_FILE = "wheelhouse.json"; // committed: { url, project, defaultBranch }
 const STATE_DIR = ".wheelhouse"; // gitignored: context.md, sessions/, hook.log
 const CRED_FILE = path.join(os.homedir(), ".config", "wheelhouse", "credentials.json");
@@ -251,6 +251,19 @@ const hooks = {
     await reportTouched(cfg, root, input.session_id, [f]);
   },
 
+  /**
+   * PreToolUse (Wheelhouse MCP tools): tag the call with this Claude Code session.
+   * The model must never be trusted to supply the id (it may omit, mistype or invent it),
+   * so whatever it passed is overwritten. updatedInput replaces the whole input, hence the
+   * spread. No permissionDecision on purpose: this must not auto-approve Wheelhouse tools
+   * the user's permission rules would otherwise prompt for. No network call, so it's instant.
+   */
+  async "pre-mcp"(cfg, root, input) {
+    const ti = input.tool_input;
+    if (!input.session_id || !ti || typeof ti !== "object" || Array.isArray(ti)) return; // fail open: server falls back to the key-level cursor
+    return { hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: { ...ti, session: input.session_id } } };
+  },
+
   /** PreToolUse (Bash): snapshot the dirty working tree so post-bash can see what the command changed. */
   async "pre-bash"(cfg, root, input) {
     const snapFile = path.join(root, STATE_DIR, "bash", `${input.tool_use_id ?? "last"}.json`);
@@ -292,7 +305,7 @@ const hooks = {
         const lines = shown.map((c) => `- ${c.actorName} ${c.summary}`).join("\n");
         const more = q.total - shown.length;
         context = `Wheelhouse: ${q.total} new change(s) from the team in ${cfg.project} since you last checked:\n${lines}${
-          more > 0 ? `\n…and ${more} more. Call get_changes with session "${id}" to see them, then ack_changes with the same session.` : ""
+          more > 0 ? `\n…and ${more} more. Call get_changes to see them, then ack_changes.` : ""
         }\nHandle anything addressed to you (these are already marked seen for this session).`;
         const last = shown.at(-1)?.seq;
         if (last) await call(cfg, "ack_changes", { seq: last, session: id }, 3000).catch((e) => log(root, `prompt ack: ${e.message}`));

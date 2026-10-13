@@ -17,6 +17,12 @@
     ],
     "PreToolUse": [
       {
+        "matcher": "mcp__plugin_wheelhouse_wheelhouse__.*",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/wheelhouse.mjs\" hook pre-mcp", "timeout": 5 }
+        ]
+      },
+      {
         "matcher": "Bash",
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/wheelhouse.mjs\" hook pre-bash", "timeout": 10 }

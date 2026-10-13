@@ -1,6 +1,6 @@
 {
   "name": "@shipstack/wheelhouse-cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "CLI and Claude Code hook runner for Shipstack Wheelhouse: keeps the board and knowledge map in sync with your working copy.",
   "type": "module",
   "bin": {

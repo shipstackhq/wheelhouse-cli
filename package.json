@@ -3,7 +3,8 @@
   "private": true,
   "description": "Repo tooling for the Wheelhouse CLI and Claude Code plugin",
   "scripts": {
+    "test": "node --test cli/test/*.test.mjs",
     "sync-plugin": "cp cli/bin/wheelhouse.mjs plugin/scripts/wheelhouse.mjs",
-    "check": "node --check cli/bin/wheelhouse.mjs && cmp -s cli/bin/wheelhouse.mjs plugin/scripts/wheelhouse.mjs && echo 'plugin copy in sync' && claude plugin validate ./plugin && claude plugin validate ."
+    "check": "node --check cli/bin/wheelhouse.mjs && node --test cli/test/*.test.mjs >/dev/null && cmp -s cli/bin/wheelhouse.mjs plugin/scripts/wheelhouse.mjs && echo 'plugin copy in sync' && claude plugin validate ./plugin && claude plugin validate ."
   }
 }

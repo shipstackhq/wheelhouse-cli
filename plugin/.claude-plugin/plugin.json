@@ -1,7 +1,7 @@
 {
   "name": "wheelhouse",
   "displayName": "Shipstack Wheelhouse",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Keeps your Wheelhouse board and knowledge map in sync with what Claude actually changes: session briefing on start, tracked edits, and a reconciliation check before each turn ends.",
   "author": {
     "name": "Shipstack"
