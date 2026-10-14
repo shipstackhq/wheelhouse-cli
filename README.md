@@ -22,13 +22,13 @@ Claude Code asks for your Wheelhouse URL and an API key (stored in your OS keych
 /wheelhouse:setup <PROJECT_KEY>
 ```
 
-You'll need a running Wheelhouse server to point it at. From a local clone you can also use `/plugin marketplace add /path/to/wheelhouse-cli`.
+The URL defaults to https://wheelhouse.shipstack.run; point it elsewhere only for your own server. From a local clone you can also use `/plugin marketplace add /path/to/wheelhouse-cli`.
 
 ## Install the CLI
 
 ```
 npm install -g @shipstack/wheelhouse-cli
-wheelhouse init --url https://your-wheelhouse --project KEY
+wheelhouse init --project KEY            # add --url for a server other than https://wheelhouse.shipstack.run
 ```
 
 See [cli/README.md](cli/README.md) for the full command list.

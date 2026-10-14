@@ -13,11 +13,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const VERSION = "0.1.3";
+const VERSION = "0.1.4";
 const CONFIG_FILE = "wheelhouse.json"; // committed: { url, project, defaultBranch }
 const STATE_DIR = ".wheelhouse"; // gitignored: context.md, sessions/, hook.log
 const CRED_FILE = path.join(os.homedir(), ".config", "wheelhouse", "credentials.json");
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+const BASELINE_PENDING = "baseline-pending"; // marker in .wheelhouse/: init ran without a key, the plugin sends the baseline
 const QUEUE_DIGEST = 10; // changes injected per prompt; the rest stay queued for get_changes
 
 /** What to tell the agent when a teammate had removed its session and it reconnected (server: session_removed). */
@@ -125,11 +126,104 @@ async function call(cfg, tool, args, timeoutMs = 4000) {
       signal: ctl.signal,
     });
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(`${tool}: ${res.status} ${body?.error?.message ?? ""}`.trim());
+    if (!res.ok) throw Object.assign(new Error(`${tool}: ${res.status} ${body?.error?.message ?? ""}`.trim()), { status: res.status });
     return body.data;
   } finally {
     clearTimeout(t);
   }
+}
+
+// ───────── interactive login ─────────
+
+const DEFAULT_URL = "https://wheelhouse.shipstack.run"; // override with --url, WHEELHOUSE_URL or wheelhouse.json (local dev: http://localhost:3456)
+const LOGIN_TRIES = 3;
+
+const canPrompt = () => !!(process.stdin.isTTY && process.stdout.isTTY) && !process.env.CI;
+
+/** Save a key for a server; chmod too, because the mode on writeFile only applies when the file is created. */
+function saveCredential(url, key) {
+  const creds = readJson(CRED_FILE, {});
+  creds[url] = key;
+  writeJson(CRED_FILE, creds, 0o600);
+  try {
+    fs.chmodSync(CRED_FILE, 0o600);
+  } catch {
+    /* best effort */
+  }
+}
+
+/** Read one line from the terminal. With `hidden`, nothing is echoed (not even asterisks), so the key never reaches the screen or scrollback. */
+function prompt(question, { hidden = false, fallback = "" } = {}) {
+  return new Promise((resolve, reject) => {
+    const stdin = process.stdin;
+    const label = fallback && !hidden ? `${question} [${fallback}]: ` : `${question}: `;
+    process.stdout.write(label);
+    let buf = "";
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding("utf8");
+    const done = (fn, v) => {
+      stdin.removeListener("data", onData);
+      stdin.setRawMode(false);
+      stdin.pause();
+      process.stdout.write("\n");
+      fn(v);
+    };
+    const onData = (chunk) => {
+      for (const ch of chunk) {
+        if (ch === "\r" || ch === "\n") return done(resolve, buf.trim() || fallback);
+        if (ch === "\u0003" || ch === "\u0004") return done(reject, new Error("cancelled")); // Ctrl-C / Ctrl-D
+        if (ch === "\u007f" || ch === "\b") {
+          if (buf && !hidden) process.stdout.write("\b \b");
+          buf = buf.slice(0, -1);
+        } else if (ch >= " ") {
+          buf += ch;
+          if (!hidden) process.stdout.write(ch);
+        }
+      }
+    };
+    stdin.on("data", onData);
+  });
+}
+
+/** Ask the server whether a key works. Returns "ok", "rejected" (401/403) or "unreachable". */
+async function checkKey(url, key) {
+  try {
+    await call({ url, key, project: "" }, "list_projects", {}, 8000);
+    return { state: "ok" };
+  } catch (e) {
+    if (e.status === 401 || e.status === 403) return { state: "rejected" };
+    return { state: "unreachable", message: e.name === "AbortError" ? "timed out" : e.message };
+  }
+}
+
+/**
+ * Prompt for the server URL and API key (hidden), validate against the server, and save on success.
+ * Returns the saved { url, key }, or null when the user gave up / ran out of tries.
+ */
+async function interactiveLogin(root, flags = {}) {
+  const known = loadConfig(root, flags).url;
+  const url = (flags.url ? String(flags.url) : await prompt("Wheelhouse URL", { fallback: known || DEFAULT_URL })).replace(/\/+$/, "");
+  for (let attempt = 1; attempt <= LOGIN_TRIES; attempt++) {
+    const key = await prompt("API key (input hidden)", { hidden: true });
+    if (!key) {
+      console.error("No key entered.");
+    } else {
+      const r = await checkKey(url, key);
+      if (r.state === "ok") {
+        saveCredential(url, key);
+        console.log(`✓ logged in to ${url}; key saved to ${CRED_FILE}`);
+        return { url, key };
+      }
+      if (r.state === "unreachable") {
+        console.error(`Could not reach ${url} (${r.message}). Check the URL and that the server is running.`);
+        return null;
+      }
+      console.error(`${url} rejected that key (401). Create one under Agents in the web app.${attempt < LOGIN_TRIES ? ` Try again (${attempt}/${LOGIN_TRIES}).` : ""}`);
+    }
+  }
+  console.error("Giving up after 3 tries.");
+  return null;
 }
 
 // ───────── git facts ─────────
@@ -189,6 +283,69 @@ async function reportTouched(cfg, root, sessionId, files, external = false) {
   await call(cfg, "session_sync", { session: sessionId, client: "claude-code", branch: branch(root), files: hashFiles(root, files), external });
 }
 
+// ───────── landing outbox ─────────
+// Git hooks run outside Claude Code and cannot read the plugin's keychain key, so they only queue what
+// landed (a JSON file per landing in .wheelhouse/outbox). Anything that has the key flushes the queue:
+// the plugin's session-start and stop hooks, or a git hook itself when a key is configured for the CLI.
+
+const outboxDir = (root) => path.join(root, STATE_DIR, "outbox");
+
+/** Queue one landing. Never throws: a failed write must not disturb a commit. */
+function queueLanding(root, entry) {
+  try {
+    const dir = outboxDir(root);
+    fs.mkdirSync(dir, { recursive: true });
+    const name = `${Date.now()}-${String(entry.sha ?? "unknown").slice(0, 12)}.json`;
+    const tmp = path.join(dir, `.${name}.tmp`);
+    fs.writeFileSync(tmp, JSON.stringify(entry) + "\n");
+    fs.renameSync(tmp, path.join(dir, name));
+    return true;
+  } catch (e) {
+    log(root, `queue landing: ${e.message}`);
+    return false;
+  }
+}
+
+function pendingLandings(root) {
+  try {
+    return fs.readdirSync(outboxDir(root)).filter((n) => n.endsWith(".json") && !n.startsWith(".")).sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Send queued landings to the server, oldest first, deleting each once it is accepted. Stops at the first
+ * failure (offline, bad key, server error) and leaves the rest queued. The server treats a repeated landing as
+ * a no-op, so two flushers racing is harmless. Returns how many were sent.
+ */
+async function flushOutbox(cfg, root, session) {
+  let sent = 0;
+  for (const name of pendingLandings(root)) {
+    const file = path.join(outboxDir(root), name);
+    const e = readJson(file, null);
+    if (!e || typeof e.files !== "object") {
+      fs.rmSync(file, { force: true }); // unreadable entry: nothing to retry
+      continue;
+    }
+    try {
+      await call(cfg, "land_changes", { sha: e.sha, branch: e.branch, files: e.files, ...(session ? { session } : {}) }, 15000);
+    } catch (err) {
+      if (err.status === 400 || err.status === 422) {
+        log(root, `outbox: dropped ${name}: ${err.message}`); // the server will never accept this payload
+        fs.rmSync(file, { force: true });
+        continue;
+      }
+      log(root, `outbox: stopped at ${name}: ${err.message}`);
+      break;
+    }
+    fs.rmSync(file, { force: true });
+    sent++;
+    if (e.sha && e.sha === git(["rev-parse", "HEAD"], { cwd: root })) writeJson(path.join(root, STATE_DIR, "landed.json"), { sha: e.sha });
+  }
+  return sent;
+}
+
 /**
  * Report commits that reached the default branch since we last looked. Lets
  * Claude Code sessions land work even where git hooks aren't installed (or
@@ -233,6 +390,10 @@ const hooks = {
     const s = loadSession(root, id);
     s.lastSnapshot = snapshot(root);
     saveSession(root, id, s);
+    if (fs.existsSync(path.join(root, STATE_DIR, BASELINE_PENDING))) {
+      await cmdBaseline(cfg, root, { quiet: true }).catch((e) => log(root, `session-start baseline: ${e.message}`));
+    }
+    await flushOutbox(cfg, root, id).catch((e) => log(root, `session-start flush: ${e.message}`));
     await autoLand(cfg, root, id).catch((e) => log(root, `session-start land: ${e.message}`));
     await call(cfg, "session_sync", { session: id, client: "claude-code", branch: branch(root), files: [] }).catch((e) => log(root, `session-start sync: ${e.message}`));
     // With `session`, the briefing registers this session's own queue cursor and tells the agent its id.
@@ -336,6 +497,7 @@ const hooks = {
   async stop(cfg, root, input) {
     const id = input.session_id;
     const s = loadSession(root, id);
+    await flushOutbox(cfg, root, id).catch((e) => log(root, `stop flush: ${e.message}`));
     await autoLand(cfg, root, id).catch((e) => log(root, `stop land: ${e.message}`));
     if (s.files.length) {
       await call(cfg, "session_sync", { session: id, client: "claude-code", branch: branch(root), files: hashFiles(root, s.files) }, 6000);
@@ -385,10 +547,10 @@ async function runHook(event) {
 async function cmdInit(flags) {
   const root = repoRoot();
   const existing = readJson(path.join(root, CONFIG_FILE), {});
-  const url = (flags.url || existing.url || process.env.WHEELHOUSE_URL || "").replace(/\/+$/, "");
+  const url = (flags.url || existing.url || process.env.WHEELHOUSE_URL || DEFAULT_URL).replace(/\/+$/, "");
   const project = (flags.project || existing.project || "").toUpperCase();
-  if (!url || !project) {
-    console.error("Usage: wheelhouse init --url <https://wheelhouse.example> --project <KEY> [--key wh_...] [--no-git-hooks] [--no-baseline]");
+  if (!project) {
+    console.error(`Usage: wheelhouse init --project <KEY> [--url <https://wheelhouse.example>] [--key wh_...] [--no-git-hooks] [--no-baseline]\nThe URL defaults to ${DEFAULT_URL}.`);
     process.exit(1);
   }
   const defaultBranch = flags.branch || existing.defaultBranch || detectDefaultBranch(root) || "main";
@@ -396,9 +558,7 @@ async function cmdInit(flags) {
   console.log(`✓ wrote ${CONFIG_FILE} (url ${url}, project ${project}, default branch ${defaultBranch})`);
 
   if (flags.key) {
-    const creds = readJson(CRED_FILE, {});
-    creds[url] = flags.key;
-    writeJson(CRED_FILE, creds, 0o600);
+    saveCredential(url, String(flags.key));
     console.log(`✓ saved API key for ${url} to ${CRED_FILE}`);
   }
 
@@ -412,9 +572,25 @@ async function cmdInit(flags) {
 
   if (!flags["no-git-hooks"]) installGitHooks(root);
 
-  const cfg = loadConfig(root, flags);
+  let cfg = loadConfig(root, flags);
+  // A stored key can be stale (revoked, other server): in a terminal, offer to log in again instead of failing later in a hook.
+  if (canPrompt() && (!cfg.key || (await checkKey(cfg.url, cfg.key)).state === "rejected")) {
+    console.log(cfg.key ? "The saved API key was rejected. Let's log in again." : "No API key yet. Let's log in.");
+    await interactiveLogin(root, { ...flags, url }).catch(() => null);
+    cfg = loadConfig(root, { ...flags, key: undefined });
+  }
   if (!cfg.key) {
-    console.log(`! no API key yet: run \`wheelhouse login --url ${url} --key wh_...\`, set WHEELHOUSE_KEY, or configure it in the Claude Code plugin.`);
+    // No key on this machine is fine for Claude Code users: git hooks only queue landings, and the plugin (which has
+    // the key) sends them and the baseline at the next session start.
+    if (!flags["no-baseline"]) {
+      fs.mkdirSync(path.join(root, STATE_DIR), { recursive: true });
+      fs.writeFileSync(path.join(root, STATE_DIR, BASELINE_PENDING), new Date().toISOString() + "\n");
+    }
+    console.error(
+      "! No API key on this machine, so nothing was sent to the server yet.\n" +
+        "  Git hooks will queue commits locally. Open a Claude Code session with the Wheelhouse plugin and it sends them,\n" +
+        "  along with the baseline. To send from the terminal instead: `wheelhouse login` (or set WHEELHOUSE_KEY), then `wheelhouse land --flush`.",
+    );
     return;
   }
   try {
@@ -449,9 +625,10 @@ function installGitHooks(root) {
 }
 
 /** Report every tracked file on the default branch as the described baseline. */
-async function cmdBaseline(cfg, root) {
+async function cmdBaseline(cfg, root, { quiet = false } = {}) {
+  const say = (m) => quiet || console.log(m); // a hook's stdout must stay clean
   const tree = git(["ls-tree", "-r", "--full-tree", cfg.defaultBranch], { cwd: root }) ?? git(["ls-tree", "-r", "--full-tree", "HEAD"], { cwd: root });
-  if (!tree) return console.log("! no commits yet; skipped baseline");
+  if (!tree) return say("! no commits yet; skipped baseline");
   const files = {};
   for (const line of tree.split("\n")) {
     const m = /^\d+ blob ([0-9a-f]+)\t(.+)$/.exec(line);
@@ -463,21 +640,33 @@ async function cmdBaseline(cfg, root) {
   }
   const head = git(["rev-parse", cfg.defaultBranch], { cwd: root });
   if (head) writeJson(path.join(root, STATE_DIR, "landed.json"), { sha: head });
-  console.log(`✓ recorded baseline hashes for ${entries.length} files on ${cfg.defaultBranch}`);
+  fs.rmSync(path.join(root, STATE_DIR, BASELINE_PENDING), { force: true });
+  say(`✓ recorded baseline hashes for ${entries.length} files on ${cfg.defaultBranch}`);
 }
 
 /** Report what landed on the default branch (git hooks / CI). */
 async function cmdLand(flags) {
   const root = repoRoot();
   const cfg = loadConfig(root, flags);
-  if (!cfg.configured) {
-    if (!flags["git-hook"]) console.error("wheelhouse is not configured here (run `wheelhouse init`).");
+  const hook = !!flags["git-hook"];
+  // Queueing needs only the link (wheelhouse.json), not a key: a git hook must work for someone who set up the plugin only.
+  if (!cfg.url || !cfg.project) {
+    if (!hook) console.error("wheelhouse is not configured here (run `wheelhouse init`).");
     return;
   }
-  if (flags.baseline) return cmdBaseline(cfg, root);
+  if (flags.flush) {
+    if (!cfg.key) return console.error("No API key to send the queue with (run `wheelhouse login`, or set WHEELHOUSE_KEY).");
+    const left = pendingLandings(root).length;
+    const sent = await flushOutbox(cfg, root);
+    return console.log(left ? `✓ sent ${sent} of ${left} queued landing(s)` : "Nothing queued.");
+  }
+  if (flags.baseline) {
+    if (!cfg.key) return console.error("No API key (run `wheelhouse login`, or set WHEELHOUSE_KEY).");
+    return cmdBaseline(cfg, root);
+  }
   const current = branch(root);
   if (current !== cfg.defaultBranch && !flags.force) {
-    if (!flags["git-hook"]) console.log(`On ${current}, not ${cfg.defaultBranch}: nothing has landed. (Use --force to report anyway.)`);
+    if (!hook) console.log(`On ${current}, not ${cfg.defaultBranch}: nothing has landed. (Use --force to report anyway.)`);
     return;
   }
   const from = flags.from ?? (flags["git-hook"] === "post-merge" ? "ORIG_HEAD" : "HEAD~1");
@@ -496,14 +685,22 @@ async function cmdLand(flags) {
     if (m) files[m[2]] = m[1];
   }
   const sha = git(["rev-parse", to], { cwd: root }) ?? undefined;
+
+  if (hook) {
+    // Git hook: queue, never call the server. If this machine also has a CLI key (credentials file, env), send right away.
+    queueLanding(root, { sha, branch: current, files, event: flags["git-hook"], queuedAt: new Date().toISOString() });
+    if (cfg.key) await flushOutbox(cfg, root).catch((e) => log(root, `hook flush: ${e.message}`));
+    return;
+  }
+
+  if (!cfg.key) return console.error("No API key (run `wheelhouse login`, or set WHEELHOUSE_KEY).");
   try {
     const r = await call(cfg, "land_changes", { sha, branch: current, files }, 15000);
     if (to === "HEAD" && sha) writeJson(path.join(root, STATE_DIR, "landed.json"), { sha });
-    if (!flags["git-hook"])
-      console.log(`✓ landed ${r.files} file(s)${r.published.length ? `; published drafts: ${r.published.join(", ")}` : ""}${r.stale.length ? `; drifted: ${r.stale.join(", ")}` : ""}${r.fresh.length ? `; back in sync: ${r.fresh.join(", ")}` : ""}`);
+    console.log(`✓ landed ${r.files} file(s)${r.published.length ? `; published drafts: ${r.published.join(", ")}` : ""}${r.stale.length ? `; drifted: ${r.stale.join(", ")}` : ""}${r.fresh.length ? `; back in sync: ${r.fresh.join(", ")}` : ""}`);
   } catch (e) {
     log(root, `land: ${e.message}`);
-    if (!flags["git-hook"]) console.error(`! ${e.message}`);
+    console.error(`! ${e.message}`);
   }
 }
 
@@ -531,6 +728,8 @@ async function cmdStatus(flags) {
   console.log(`branch:   ${branch(root)} (default ${cfg.defaultBranch})`);
   const dirty = dirtyPaths(root);
   console.log(`dirty:    ${dirty.length} file(s)`);
+  const queued = pendingLandings(root).length;
+  console.log(`queued:   ${queued} landing(s) waiting to be sent${queued ? " (flushed by the next Claude Code session, or `wheelhouse land --flush`)" : ""}`);
   if (!cfg.configured) return;
   try {
     const b = await call(cfg, "get_briefing", { max_chars: 1500 });
@@ -553,25 +752,40 @@ async function cmdSync(flags) {
   console.log(st.clean ? "Nothing owed." : st.message);
 }
 
-function cmdLogin(flags) {
-  if (!flags.url || !flags.key) {
-    console.error("Usage: wheelhouse login --url <https://wheelhouse.example> --key wh_...");
+async function cmdLogin(flags) {
+  // Scripted form, kept for CI: both flags given, no prompt, no validation round trip needed.
+  if (flags.url && typeof flags.key === "string") {
+    const url = flags.url.replace(/\/+$/, "");
+    saveCredential(url, flags.key);
+    console.log(`✓ saved key for ${url} to ${CRED_FILE}`);
+    return;
+  }
+  if (!canPrompt()) {
+    console.error("`wheelhouse login` needs a terminal to prompt. In scripts, pass --url and --key, or set WHEELHOUSE_KEY.");
     process.exit(1);
   }
-  const creds = readJson(CRED_FILE, {});
-  creds[flags.url.replace(/\/+$/, "")] = flags.key;
-  writeJson(CRED_FILE, creds, 0o600);
-  console.log(`✓ saved key for ${flags.url} to ${CRED_FILE}`);
+  let root = process.cwd();
+  try {
+    root = repoRoot();
+  } catch {
+    /* not in a repo: fall back to the default URL */
+  }
+  try {
+    if (!(await interactiveLogin(root, flags))) process.exit(1);
+  } catch (e) {
+    if (e.message === "cancelled") process.exit(130);
+    throw e;
+  }
 }
 
 const HELP = `wheelhouse ${VERSION}: Shipstack Wheelhouse CLI
 
-  init --url URL --project KEY [--key wh_...]   link this repo, install git hooks, record baseline hashes
-  login --url URL --key wh_...                  store an API key for a server
+  init --project KEY [--url URL] [--key wh_...] link this repo, install git hooks, record baseline hashes
+  login [--url URL]                             prompt (URL defaults to the hosted Wheelhouse) for an API key (hidden), check it, and save it. Scripts: login --url URL --key wh_...
   status                                        show config and server state
   context [TICKET]                              print the project briefing (writes .wheelhouse/context.md) or a ticket's context
   sync                                          report working-copy changes as a session (for non-Claude Code workflows)
-  land [--baseline] [--from REF --to REF]       report what landed on the default branch (git hooks run this)
+  land [--baseline|--flush] [--from REF --to REF]  report what landed on the default branch. Git hooks only queue it; --flush sends the queue
   hook <event>                                  Claude Code hook runner: session-start | post-edit | pre-bash | post-bash | prompt | stop | session-end
 
 Config: ${CONFIG_FILE} (url, project, defaultBranch; commit it). Key: WHEELHOUSE_KEY, the plugin's api_key option, or ~/.config/wheelhouse/credentials.json.

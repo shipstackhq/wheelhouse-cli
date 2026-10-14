@@ -29,7 +29,7 @@ You can also add the marketplace from a local clone: `/plugin marketplace add /p
 
 When enabled, Claude Code asks for:
 
-- **Wheelhouse URL**, e.g. `https://wheelhouse.example.com` or `http://localhost:3456`
+- **Wheelhouse URL**, defaults to `https://wheelhouse.shipstack.run`; change it only for your own server (e.g. `http://localhost:3456` for local development)
 - **API key** from Wheelhouse → Agents & API keys. It's stored in your OS credential store, never in a file.
 
 Then, in each repository:
@@ -40,11 +40,7 @@ Then, in each repository:
 
 This writes `wheelhouse.json` (commit it), adds `.wheelhouse/` to `.gitignore`, installs git hooks, and records baseline content hashes.
 
-Git hooks run outside Claude Code, so they can't read the plugin's stored key. To let commits made outside Claude sessions report landings, run this once in your terminal:
-
-```
-node <plugin>/scripts/wheelhouse.mjs login --url <url> --key wh_...
-```
+You don't need a second key. Git hooks run outside Claude Code and can't read the plugin's stored key, so they only queue what landed (in `.wheelhouse/outbox`); the plugin sends the queue, and the one-time baseline, at the next session start and turn end. If you also commit outside Claude sessions and want those reported immediately, run `npx @shipstack/wheelhouse-cli login` once (it asks for the URL, press Enter for `https://wheelhouse.shipstack.run`, and your key, typed hidden). For scripts, `login --url <url> --key wh_...` still works.
 
 Commits are also picked up at the next Claude session start or turn end on the default branch, so this is a backstop, not a requirement.
 

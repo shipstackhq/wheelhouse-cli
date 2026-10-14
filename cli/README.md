@@ -11,12 +11,12 @@ It has no dependencies and runs on Node 18+ with git.
 ## Commands
 
 ```
-wheelhouse init --url URL --project KEY [--key wh_...]   link this repo, install git hooks, record baseline hashes
-wheelhouse login --url URL --key wh_...                  store an API key (~/.config/wheelhouse/credentials.json, mode 600)
+wheelhouse init --project KEY [--url URL] [--key wh_...] link this repo, install git hooks, record baseline hashes
+wheelhouse login [--url URL]                             prompt (URL defaults to https://wheelhouse.shipstack.run) for an API key (hidden), check it, store it (scripts: --url URL --key wh_...) (~/.config/wheelhouse/credentials.json, mode 600)
 wheelhouse status                                        config and server state
 wheelhouse context [TICKET]                              print the project briefing (and write .wheelhouse/context.md) or a ticket's context pack
 wheelhouse sync                                          report working-copy changes as a session (for workflows without Claude Code)
-wheelhouse land [--baseline] [--from REF --to REF]       report what landed on the default branch (the git hooks run this)
+wheelhouse land [--baseline|--flush] [--from REF --to REF]  report what landed on the default branch. Git hooks only queue it locally; --flush sends the queue
 wheelhouse hook <event>                                  Claude Code hook runner (used by the plugin)
 ```
 
@@ -36,7 +36,7 @@ The API key is resolved in this order:
 ## How sync works
 
 - **Content hashes** are git blob ids, so the server can compare working copies and commits without ever seeing file contents.
-- **Landing.** `post-commit`, `post-merge` and `post-rewrite` git hooks report changes on the default branch, and so do Claude Code session starts and turn ends.
+- **Landing.** `post-commit`, `post-merge` and `post-rewrite` git hooks queue what landed on the default branch in `.wheelhouse/outbox` and never need a key. Claude Code session starts and turn ends (which have the plugin's key) send the queue, and if this machine also has a CLI key the git hook sends right away.
   - Pending map drafts for the affected nodes are published.
   - Nodes whose files changed without a draft are flagged stale.
   - Reverting a file clears the flag.

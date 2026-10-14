@@ -1,7 +1,7 @@
 {
   "name": "wheelhouse",
   "displayName": "Shipstack Wheelhouse",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Keeps your Wheelhouse board and knowledge map in sync with what Claude actually changes: session briefing on start, tracked edits, and a reconciliation check before each turn ends.",
   "author": {
     "name": "Shipstack"
@@ -19,9 +19,9 @@
     "server_url": {
       "type": "string",
       "title": "Wheelhouse URL",
-      "description": "Base URL of your Wheelhouse server, e.g. https://wheelhouse.example.com",
+      "description": "Base URL of your Wheelhouse server. Leave the default unless you run your own (local dev: http://localhost:3456)",
       "required": true,
-      "default": "http://localhost:3456"
+      "default": "https://wheelhouse.shipstack.run"
     },
     "api_key": {
       "type": "string",
