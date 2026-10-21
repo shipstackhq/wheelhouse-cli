@@ -1,0 +1,160 @@
+// One job, run by the Claude Code CLI the user installed and signed into. The daemon never touches its credentials: it starts
+// `claude -p` in the job's worktree and reads what it prints (stream-json), turning it into short progress events.
+//
+// Runs are headless, so nobody can answer a permission prompt. --restricted ignores the user's and the repository's settings files
+// (no hooks or plugins of theirs run), keeps file tools inside the worktree and refuses bypassPermissions; --permission-prompts none
+// refuses anything that would have asked; the allow and deny lists come from the daemon's config.
+
+import { spawn } from "node:child_process";
+
+/** Build the agent's instructions from the issue. */
+export function buildPrompt(offer) {
+  const { issue, repository, branch } = offer;
+  return [
+    `You are working on the Wheelhouse issue ${issue.ref}: ${issue.title}`,
+    "",
+    issue.body?.trim() ? issue.body.trim() : "(The issue has no description.)",
+    "",
+    "---",
+    `You are in a fresh git worktree of ${repository.fullName ?? repository.name}, on the branch ${branch}, made from ${repository.defaultBranch}.`,
+    repository.pathLimit ? `This team's work is limited to ${repository.pathLimit} in this repository.` : null,
+    "Make the change the issue asks for. Run the project's tests or checks where it has them, and fix what you broke.",
+    `Commit your work on this branch with messages that start with "${issue.ref}: ". Do not push and do not switch branches: Wheelhouse pushes the branch when you finish.`,
+    "Finish with a short summary of what you changed and anything left to do.",
+  ]
+    .filter((l) => l !== null)
+    .join("\n");
+}
+
+export function claudeArgs(offer, runner) {
+  return [
+    "-p",
+    buildPrompt(offer),
+    "--model",
+    offer.model,
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--restricted",
+    "--strict-mcp-config",
+    "--tools",
+    runner.tools.join(","),
+    "--permission-mode",
+    runner.permissionMode,
+    "--permission-prompts",
+    "none",
+    ...(runner.allowedTools.length ? ["--allowedTools", runner.allowedTools.join(",")] : []),
+    ...(runner.disallowedTools?.length ? ["--disallowedTools", runner.disallowedTools.join(",")] : []),
+    "--settings",
+    JSON.stringify({ disableAllHooks: true }),
+  ];
+}
+
+const short = (s, n = 300) => {
+  const t = String(s ?? "").replace(/\s+/g, " ").trim();
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+};
+
+/** What to show for a tool call: the file, the command, the pattern. */
+function toolSummary(name, input = {}) {
+  if (input.file_path) return short(input.file_path, 160);
+  if (input.command) return short(input.command, 160);
+  if (input.pattern) return short(input.pattern, 120);
+  if (input.path) return short(input.path, 160);
+  return "";
+}
+
+/** A line of stream-json as zero or more progress events. Unknown lines are ignored. */
+export function eventsFrom(line) {
+  let m;
+  try {
+    m = JSON.parse(line);
+  } catch {
+    return [];
+  }
+  if (m.type === "system" && m.subtype === "init") return [{ type: "started", data: { model: m.model ?? null, sessionId: m.session_id ?? null } }];
+  if (m.type === "assistant" && Array.isArray(m.message?.content)) {
+    const out = [];
+    for (const c of m.message.content) {
+      if (c.type === "text" && c.text?.trim()) out.push({ type: "text", data: { text: short(c.text, 600) } });
+      if (c.type === "tool_use") out.push({ type: "tool", data: { name: c.name, summary: toolSummary(c.name, c.input) } });
+    }
+    return out;
+  }
+  if (m.type === "result")
+    return [
+      {
+        type: "result",
+        data: {
+          subtype: m.subtype ?? null,
+          isError: m.is_error === true,
+          numTurns: m.num_turns ?? null,
+          costUsd: typeof m.total_cost_usd === "number" ? m.total_cost_usd : null,
+          durationMs: m.duration_ms ?? null,
+          text: short(m.result, 1000),
+        },
+      },
+    ];
+  return [];
+}
+
+/** Whether the run stopped on the subscription's usage limit, which every other run would hit too. */
+export const isRateLimited = (text) => /usage limit|rate limit|429|limit reached|overloaded/i.test(String(text ?? ""));
+
+/**
+ * Run claude in `cwd`. Resolves { ok, result, stderr, exitCode } when it ends; `signal` stops it (SIGTERM to its process group, then
+ * SIGKILL after ten seconds). `onEvent` gets each progress event; `onSpawn` the child's pid, for the job record.
+ */
+export function runClaude({ offer, cwd, runner, claudePath = "claude", signal, onEvent = () => {}, onSpawn = () => {}, timeoutMs }) {
+  return new Promise((resolve) => {
+    const child = spawn(claudePath, claudeArgs(offer, runner), { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "wheelhouse-daemon" } });
+    onSpawn(child.pid);
+    let result = null;
+    let stderr = "";
+    let buf = "";
+    let killed = null;
+    const stop = (why) => {
+      if (killed || child.exitCode !== null) return;
+      killed = why;
+      try {
+        process.kill(-child.pid, "SIGTERM");
+      } catch {
+        /* already gone */
+      }
+      setTimeout(() => {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }, 10_000).unref();
+    };
+    const timer = setTimeout(() => stop("timeout"), timeoutMs ?? runner.timeoutMinutes * 60_000);
+    const onAbort = () => stop("canceled");
+    signal?.addEventListener("abort", onAbort);
+    if (signal?.aborted) onAbort();
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (d) => {
+      buf += d;
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i);
+        buf = buf.slice(i + 1);
+        for (const e of eventsFrom(line)) {
+          if (e.type === "result") result = e.data;
+          onEvent(e);
+        }
+      }
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (d) => (stderr = (stderr + d).slice(-4000)));
+    const done = (exitCode, error) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve({ ok: !killed && exitCode === 0 && result && !result.isError, exitCode, result, stderr: short(stderr, 1000), stopped: killed, error });
+    };
+    child.on("error", (e) => done(null, e.code === "ENOENT" ? `claude not found at "${claudePath}"` : e.message));
+    child.on("close", (code) => done(code, null));
+  });
+}

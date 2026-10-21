@@ -1,6 +1,6 @@
 # Wheelhouse agent daemon
 
-> **Status: in development. Nothing here runs yet, and the package is marked `private` so it cannot be published by accident.**
+> **Status: MVP, macOS and the Claude Code CLI. Not published: the package is marked `private` so it cannot be published by accident.** The design is in [DESIGN.md](DESIGN.md).
 
 The daemon is a background service for a machine you own. It lets Wheelhouse hand a ready ticket to an agent on that machine, and it supervises the work and reports back. It is the counterpart of a self-hosted CI runner, for coding agents.
 
@@ -16,15 +16,28 @@ These shape everything that gets built here.
 - **Work is isolated and bounded.** Each job runs in its own git worktree on its own branch, never pushes to the default branch, and runs under limits you set. You can stop any job.
 - **Jobs are authenticated.** The daemon rejects anything not signed for this machine.
 
-## Planned layout
+## Use it
 
-Not created yet; this is where things will go.
+Needs Node 18 or later, git with access to the repositories, and Claude Code installed and signed in on the machine.
+
+```sh
+node daemon/src/cli.mjs pair --server https://your-wheelhouse   # prints a code and opens the page to approve it
+node daemon/src/cli.mjs run                                     # run in the foreground
+sh daemon/platform/macos/install.sh --entry "$(pwd)/daemon/src/main.mjs"   # or as a background service
+node daemon/src/cli.mjs status
+```
+
+Then "Run on device" on an issue in Wheelhouse. Settings → Devices shows the machine, what it can run, and how many runs it takes at once.
+Local settings (how runs are fenced, a setup command per repository, ssh instead of https) are in `~/.wheelhouse/daemon/config.json`.
+
+## Layout
 
 ```
 daemon/
-├── src/        the engine: stream client, job runner, worktrees, runtime adapters
-├── test/
-└── README.md
+├── src/        the daemon (see DESIGN.md for what each file does)
+├── test/       node --test test/*.test.mjs
+├── platform/   the background service for macOS and Windows
+└── DESIGN.md
 ```
 
 ## Relationship to the rest of this repo

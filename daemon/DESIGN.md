@@ -1,6 +1,6 @@
 # Daemon design (MVP)
 
-Status: agreed for the MVP, 2026-10-21. Scope is macOS and the Claude Code CLI on the user's own subscription. Linux, Windows,
+Status: agreed for the MVP and built, 2026-10-21 (server: Wheelhouse branch `wh/daemon-mvp`). Scope is macOS and the Claude Code CLI on the user's own subscription. Linux, Windows,
 local models, API-key mode and the chat agent come later; where a decision affects them it is noted.
 
 ## What the MVP proves
@@ -80,6 +80,7 @@ capabilities (JSON, from the latest report), pool size, chat model (unused until
 offered ──► accepted ──► running ──► succeeded
    │            │           ├──────► failed
    │            │           └──────► canceled
+   ├──► rejected (no free slot, paused, bad offer)
    └──► expired └──► (missed heartbeats) ──► lost
 ```
 
@@ -114,7 +115,9 @@ Phase 2 adds `chat.message` (down), and `chat.delta` and `chat.done` (up).
 }
 ```
 
-`signedIn` and `models` come from probing the CLI, not from reading its files. Wheelhouse only offers the models listed.
+`signedIn` and `subscriptionType` come from `claude auth status --json`, and the version from `claude --version`: the CLI is asked,
+its files are never read, and the email and organisation it also prints are not sent. `models` is the CLI's aliases (opus, sonnet,
+haiku) once signed in; which of them a plan can use only shows when a run tries. Wheelhouse only offers the models listed.
 
 ## The daemon itself
 
@@ -156,14 +159,22 @@ Finished worktrees are removed once their branch is pushed. Failed and canceled 
 claude -p "<prompt built from the issue>" \
   --model <job model> \
   --output-format stream-json --verbose \
-  --permission-mode <policy> --allowedTools <list>
+  --restricted --strict-mcp-config --settings '{"disableAllHooks":true}' \
+  --tools <list> --permission-mode acceptEdits --permission-prompts none \
+  --allowedTools <list> --disallowedTools <list>
 ```
+
+`--restricted` ignores the user's and the repository's settings files (so none of their hooks or plugins run in a job), keeps the file
+tools inside the worktree and refuses `bypassPermissions`. Not `--bare`: it skips Keychain reads, which is where a subscription
+sign-in lives on macOS. `--permission-prompts none` refuses whatever would have asked. The tool lists are in `config.json` (`runner`).
 
 - The working directory is the job's worktree, on branch `wh/<issue-key>-<slug>`.
 - There is no terminal to answer permission prompts, so each job runs under a fixed policy: edits allowed inside the worktree,
-  a set list of shell commands, no `--dangerously-skip-permissions`. Relaying prompts to the web UI is a later step.
-- Limits per job: wall-clock timeout and a turn cap. Cancel sends SIGTERM to the process group, then SIGKILL after 10 s.
-- When it ends, the daemon commits anything left uncommitted and pushes the branch, then sends `job.finish`.
+  a set list of shell commands, no `--dangerously-skip-permissions`. Relaying prompts to the web UI is a later step. An allow rule
+  matches one command, so a compound command (`a && b`) is refused; the daemon commits what the agent leaves, so work is not lost.
+- Limits per job: a wall-clock timeout (45 minutes by default). Cancel sends SIGTERM to the process group, then SIGKILL after 10 s.
+- When it ends (also when canceled), the daemon commits anything left uncommitted and pushes the branch if it has commits, then
+  sends `job.finish`. A pushed, successful worktree is removed at once; others are kept for a day for a look.
 - If one job reports a rate-limit error, the supervisor pauses new jobs for the whole pool and backs off, because the limit is
   shared by the whole subscription.
 

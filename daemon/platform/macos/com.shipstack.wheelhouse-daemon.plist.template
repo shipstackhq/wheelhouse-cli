@@ -28,9 +28,12 @@
   <key>RunAtLoad</key>
   <true/>
 
-  <!-- Restart if it exits for any reason. -->
+  <!-- Restart it when it fails. A clean exit (the device was unpaired) stays stopped. -->
   <key>KeepAlive</key>
-  <true/>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
 
   <!-- Throttle restarts so a crash loop does not spin the CPU. -->
   <key>ThrottleInterval</key>

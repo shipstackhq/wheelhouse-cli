@@ -23,5 +23,18 @@
   "homepage": "https://github.com/shipstackhq/wheelhouse-cli/tree/main/daemon#readme",
   "bugs": {
     "url": "https://github.com/shipstackhq/wheelhouse-cli/issues"
-  }
+  },
+  "bin": {
+    "wheelhouse-daemon": "src/cli.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "files": [
+    "src",
+    "platform",
+    "README.md",
+    "DESIGN.md",
+    "LICENSE"
+  ]
 }
