@@ -6,6 +6,7 @@ This repo contains:
 
 - **`cli/`**: the `@shipstack/wheelhouse-cli` npm package, which installs the `wheelhouse` command. It links a repo to a Wheelhouse project, reports what lands on the default branch, and runs the Claude Code hooks.
 - **`plugin/`**: the Claude Code plugin. It adds the hooks, the Wheelhouse MCP server, `/wheelhouse:*` commands, and a skill.
+- **`daemon/`**: the Wheelhouse agent daemon, a background service that runs agent jobs from Wheelhouse on a machine you own. In development and not released; it is its own package and is not part of the plugin.
 - **`.claude-plugin/marketplace.json`**: lets you install the plugin straight from this repo.
 - **`AGENT_README.md`**: a guide for AI agents connecting to Wheelhouse.
 

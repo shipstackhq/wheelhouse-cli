@@ -1,0 +1,27 @@
+{
+  "name": "@shipstack/wheelhouse-daemon",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Wheelhouse agent daemon: a background service on a machine you own that runs agent jobs sent from Wheelhouse. In development, not released.",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "wheelhouse",
+    "shipstack",
+    "daemon",
+    "agents"
+  ],
+  "license": "MIT",
+  "author": "Shipstack",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shipstackhq/wheelhouse-cli.git",
+    "directory": "daemon"
+  },
+  "homepage": "https://github.com/shipstackhq/wheelhouse-cli/tree/main/daemon#readme",
+  "bugs": {
+    "url": "https://github.com/shipstackhq/wheelhouse-cli/issues"
+  }
+}
