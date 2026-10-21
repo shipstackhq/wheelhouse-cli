@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent for the Wheelhouse agent daemon. Placeholders are filled in by install.sh:
+    __NODE__     absolute path to the node binary
+    __ENTRY__    absolute path to the daemon's entry file
+    __HOME__     the user's home directory (the daemon's state lives under ~/.wheelhouse)
+    __LOGDIR__   where launchd writes stdout and stderr
+  It is an agent (per user, in the login session), not a daemon (system-wide): see ../README.md.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.shipstack.wheelhouse-daemon</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__ENTRY__</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__HOME__</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart if it exits for any reason. -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Throttle restarts so a crash loop does not spin the CPU. -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>__LOGDIR__/wheelhouse-daemon.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOGDIR__/wheelhouse-daemon.err.log</string>
+</dict>
+</plist>
