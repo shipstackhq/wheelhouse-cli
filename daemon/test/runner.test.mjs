@@ -34,6 +34,9 @@ test("the prompt carries the issue and the rules of the run", () => {
   assert.match(p, /WH-9: Fix it/);
   assert.match(p, /Steps to reproduce/);
   assert.match(p, /Do not push/);
+  assert.match(p, /docs-only change run no tests/);
+  assert.match(p, /not the whole repository's suite/);
+  assert.match(p, /frozen-lockfile/);
 });
 
 test("the run is headless and fenced: restricted, no MCP, no hooks, prompts refused, push denied", () => {

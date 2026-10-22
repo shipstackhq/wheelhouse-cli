@@ -4,7 +4,7 @@ The daemon is an ordinary program. The operating system keeps it running, so it 
 
 | Platform | Mechanism | Runs as | Starts | Restarts on crash |
 |---|---|---|---|---|
-| macOS | LaunchAgent (`macos/`) | you, in your login session | at login | yes (`KeepAlive`, unless it exited cleanly because it was unpaired) |
+| macOS | LaunchAgent (`macos/`) | you, in your login session | at login | yes (`KeepAlive`): after any stop except being unpaired, which exits cleanly and stays stopped |
 | Windows | Scheduled Task at logon (`windows/`) | you, in your session | at logon | yes (restart on failure) |
 
 **Why per-user, not system-wide.** Claude Code and Codex subscriptions only work as the logged-in user, and those credentials must never leave the machine. A system service (a macOS LaunchDaemon, a Windows service) runs before anyone logs in and as a different account, so it cannot use them. For the same reason, Windows uses a logon task rather than a Windows service.

@@ -172,6 +172,8 @@ sign-in lives on macOS. `--permission-prompts none` refuses whatever would have 
 - There is no terminal to answer permission prompts, so each job runs under a fixed policy: edits allowed inside the worktree,
   a set list of shell commands, no `--dangerously-skip-permissions`. Relaying prompts to the web UI is a later step. An allow rule
   matches one command, so a compound command (`a && b`) is refused; the daemon commits what the agent leaves, so work is not lost.
+- A run is told to check in proportion to its change (no tests for a docs-only change, one package's checks for code) and to install
+  dependencies only when a check needs them, because a fresh worktree has none and a full suite on a large repository takes minutes.
 - Limits per job: a wall-clock timeout (45 minutes by default). Cancel sends SIGTERM to the process group, then SIGKILL after 10 s.
 - When it ends (also when canceled), the daemon commits anything left uncommitted and pushes the branch if it has commits, then
   sends `job.finish`. A pushed, successful worktree is removed at once; others are kept for a day for a look.

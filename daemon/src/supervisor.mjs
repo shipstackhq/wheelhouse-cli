@@ -147,12 +147,12 @@ export class Supervisor {
         pushed = true;
       }
       const result = { commit: sum.commit, pushed, diffStats: sum.diffStats, costUsd: r.result?.costUsd ?? null, durationMs: this.now() - started };
-      if (r.stopped === "canceled" || signal.aborted) outcome = { state: "canceled", ...result, error: "Stopped on request" };
+      if (r.stopped === "canceled" || signal.aborted) outcome = { state: "canceled", ...result, error: this.stopReason() };
       else if (r.stopped === "timeout") outcome = { state: "failed", ...result, error: `The agent ran past the ${this.config.runner.timeoutMinutes}-minute limit` };
       else if (!r.ok) outcome = { state: "failed", ...result, error: r.error ?? r.result?.text ?? (r.stderr || `claude exited with ${r.exitCode}`) };
       else outcome = { state: "succeeded", ...result };
     } catch (e) {
-      outcome = e instanceof Canceled || signal.aborted ? { state: "canceled", error: "Stopped on request" } : { state: "failed", error: e.message };
+      outcome = e instanceof Canceled || signal.aborted ? { state: "canceled", error: this.stopReason() } : { state: "failed", error: e.message };
       reporter.event("error", { message: String(e.message).slice(0, 1000) });
     }
     await reporter.finish({ ...outcome, durationMs: this.now() - started });
@@ -160,6 +160,11 @@ export class Supervisor {
     if (cwd && outcome.state === "succeeded" && outcome.pushed) await this.workspace.removeWorktree(m.repository.id, m.jobId).catch(() => {});
     this.log(`job ${m.jobId}: ${outcome.state}${outcome.error ? ` (${outcome.error})` : ""}`);
     return outcome;
+  }
+
+  /** Why a run was stopped: the daemon going down is not the same as someone pressing Stop. */
+  stopReason() {
+    return this.stopping ? "The daemon was stopped while this ran. Run it again once it is back." : "Stopped on request";
   }
 
   /** Stop taking work and cancel what is running; resolves when every job has reported. */

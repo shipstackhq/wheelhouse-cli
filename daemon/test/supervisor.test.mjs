@@ -151,6 +151,19 @@ test("a run that hits the usage limit pauses new offers", async () => {
   assert.match(s.posts.find((p) => p.path === `/api/daemon/jobs/${next.jobId}/reject`).body.detail, /usage limit/);
 });
 
+test("a Stop from Wheelhouse says it was requested; the daemon going down says that instead", async () => {
+  const a = offer();
+  await s.sup.handle(sign(a));
+  await s.sup.handle(sign({ type: "job.cancel", deviceId: DEVICE, issuedAt: "x", jobId: a.jobId }));
+  assert.equal((await s.sup.jobs.get(a.jobId)?.done)?.error, "Stopped on request");
+  const b = offer();
+  await s.sup.handle(sign(b));
+  await s.sup.shutdown();
+  const finish = s.posts.find((p) => p.path === `/api/daemon/jobs/${b.jobId}/finish`);
+  assert.equal(finish.body.state, "canceled");
+  assert.match(finish.body.error, /daemon was stopped/);
+});
+
 test("shutdown cancels what is running and waits for it to report", async () => {
   const m = offer();
   await s.sup.handle(sign(m));

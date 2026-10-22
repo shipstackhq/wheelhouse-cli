@@ -18,7 +18,8 @@ export function buildPrompt(offer) {
     "---",
     `You are in a fresh git worktree of ${repository.fullName ?? repository.name}, on the branch ${branch}, made from ${offer.baseBranch ?? repository.defaultBranch}.`,
     repository.pathLimit ? `This team's work is limited to ${repository.pathLimit} in this repository.` : null,
-    "Make the change the issue asks for. Run the project's tests or checks where it has them, and fix what you broke.",
+    "Make the change the issue asks for. Then check it, in proportion to what you changed: for a Markdown or other docs-only change run no tests at all; for code run the tests, lint and typecheck that cover the files you touched (one package or one test file, not the whole repository's suite), and fix what you broke.",
+    "The worktree starts without installed dependencies. Install them only when a check you actually need requires it, never to look around, and prefer the frozen-lockfile form (for example `pnpm install --frozen-lockfile`).",
     `Commit your work on this branch with messages that start with "${issue.ref}: ". Do not push and do not switch branches: Wheelhouse pushes the branch when you finish.`,
     "Finish with a short summary of what you changed and anything left to do.",
   ]

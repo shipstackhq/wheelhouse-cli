@@ -116,10 +116,18 @@ async function main() {
   if (cmd === "unpair") return unpair();
   if (cmd === "run") {
     const stop = new AbortController();
-    for (const s of ["SIGTERM", "SIGINT"]) process.once(s, () => (log(`${s}: stopping, canceling running jobs`), stop.abort()));
+    let signalled = null;
+    for (const s of ["SIGTERM", "SIGINT"])
+      process.once(s, () => {
+        signalled = s;
+        log(`${s}: stopping, canceling running jobs`);
+        stop.abort();
+      });
     const { unpaired } = await runDaemon({ signal: stop.signal });
-    // Unpaired is a clean exit, so the background service does not restart it; anything else is a failure and is restarted.
-    process.exit(unpaired ? 0 : stop.signal.aborted ? 0 : 1);
+    // Only being unpaired is a clean exit: the background service then stays stopped. Any other stop, a signal included, exits as a
+    // failure (the shell's 128 + signal number), so the service starts the daemon again. Deliberate stops (launchctl bootout, the
+    // uninstall script) remove the service first, so they are not restarted.
+    process.exit(unpaired ? 0 : signalled === "SIGINT" ? 130 : signalled === "SIGTERM" ? 143 : 1);
   }
   if (cmd === "--version" || cmd === "version") return console.log(VERSION);
   console.log("usage: wheelhouse-daemon pair --server <url> [--name NAME] | run | status | unpair");
