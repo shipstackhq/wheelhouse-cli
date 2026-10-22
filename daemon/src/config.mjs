@@ -26,28 +26,75 @@ export const DEFAULT_RUNNER = {
   // The built-in tools the agent has at all; --restricted removes the rest.
   tools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "TodoWrite"],
   permissionMode: "acceptEdits",
+  // One rule per command. A chained command (a && b, a; b, a | b) runs only if every part is allowed.
   allowedTools: [
+    // Looking around (read only)
+    "Bash(pwd)",
+    "Bash(ls:*)",
+    "Bash(cat:*)",
+    "Bash(head:*)",
+    "Bash(tail:*)",
+    "Bash(wc:*)",
+    "Bash(od:*)",
+    "Bash(echo:*)",
+    "Bash(find:*)",
+    "Bash(grep:*)",
+    "Bash(rg:*)",
+    "Bash(diff:*)",
+    // git, on this branch only
     "Bash(git status:*)",
     "Bash(git diff:*)",
     "Bash(git log:*)",
     "Bash(git show:*)",
+    "Bash(git branch --show-current)",
+    "Bash(git rev-parse:*)",
+    "Bash(git ls-files:*)",
+    "Bash(git blame:*)",
     "Bash(git add:*)",
     "Bash(git commit:*)",
-    "Bash(ls:*)",
+    "Bash(git mv:*)",
+    "Bash(git rm:*)",
+    // Installing, building and checking the project
+    "Bash(npm install:*)",
+    "Bash(npm ci:*)",
     "Bash(npm test:*)",
     "Bash(npm run:*)",
-    "Bash(npm install:*)",
     "Bash(npx tsc:*)",
+    "Bash(npx eslint:*)",
+    "Bash(npx prettier:*)",
+    "Bash(pnpm install:*)",
     "Bash(pnpm test:*)",
     "Bash(pnpm run:*)",
-    "Bash(pnpm install:*)",
     "Bash(pnpm typecheck:*)",
     "Bash(pnpm lint:*)",
+    "Bash(pnpm build:*)",
+    "Bash(pnpm --filter:*)",
+    "Bash(pnpm exec tsc:*)",
+    "Bash(pnpm exec eslint:*)",
+    "Bash(yarn install:*)",
     "Bash(yarn test:*)",
+    "Bash(yarn run:*)",
     "Bash(node --test:*)",
+    "Bash(npx tsx --test:*)",
   ],
-  // The daemon pushes the branch itself, after the run.
-  disallowedTools: ["Bash(git push:*)", "Bash(git checkout:*)", "Bash(git switch:*)", "Bash(git reset:*)", "Bash(git worktree:*)"],
+  // Refused even if an allow rule would match. The daemon pushes the branch itself, after the run.
+  disallowedTools: [
+    "Bash(git push:*)",
+    "Bash(git checkout:*)",
+    "Bash(git switch:*)",
+    "Bash(git reset:*)",
+    "Bash(git rebase:*)",
+    "Bash(git branch -d:*)",
+    "Bash(git branch -D:*)",
+    "Bash(git worktree:*)",
+    "Bash(git remote:*)",
+    "Bash(git config:*)",
+    "Bash(rm -rf:*)",
+    "Bash(curl:*)",
+    "Bash(wget:*)",
+    "Bash(ssh:*)",
+    "Bash(sudo:*)",
+  ],
   timeoutMinutes: 45,
 };
 
@@ -84,11 +131,18 @@ export function loadConfig(p = paths()) {
   return { ...DEFAULT_CONFIG, ...saved, runner: { ...DEFAULT_RUNNER, ...(saved.runner ?? {}) } };
 }
 
-/** Write the whole config atomically (a crash mid-write never leaves half a file), readable only by this user. */
+/** Only what differs from the defaults is saved, so a newer daemon's defaults (the runner policy, say) reach an existing machine. */
+function overrides(config) {
+  const out = {};
+  for (const [k, v] of Object.entries(config)) if (JSON.stringify(v) !== JSON.stringify(DEFAULT_CONFIG[k])) out[k] = v;
+  return out;
+}
+
+/** Write the config atomically (a crash mid-write never leaves half a file), readable only by this user. */
 export function saveConfig(config, p = paths()) {
   fs.mkdirSync(p.home, { recursive: true, mode: 0o700 });
   const tmp = `${p.config}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
+  fs.writeFileSync(tmp, JSON.stringify(overrides(config), null, 2) + "\n", { mode: 0o600 });
   fs.renameSync(tmp, p.config);
 }
 

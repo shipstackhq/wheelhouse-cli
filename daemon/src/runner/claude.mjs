@@ -26,6 +26,15 @@ export function buildPrompt(offer) {
     .join("\n");
 }
 
+/** Told to every run, so it uses the shell it has instead of giving up after one refusal. */
+export const SHELL_RULES = [
+  "This run is unattended: nobody can approve a command, so a command that is not pre-approved is refused instead of asked.",
+  "Pre-approved: reading commands (ls, cat, head, tail, wc, find, grep, rg, diff, echo, pwd), git status/diff/log/show/rev-parse/ls-files/blame/add/commit/mv/rm, and the project's install, test, lint, typecheck and build commands through npm, pnpm, yarn, npx tsc/eslint/prettier or node --test.",
+  "Not allowed: git push, checkout, switch, reset, rebase, worktree, remote or config, deleting branches, rm -rf, curl, wget, ssh and sudo.",
+  "A chained command (a && b, a; b, a | b) runs only if every part is pre-approved; when in doubt run one command per call.",
+  "One refused command does not mean the others are refused: keep using the approved ones, and commit your work yourself with git add and git commit.",
+].join(" ");
+
 export function claudeArgs(offer, runner) {
   return [
     "-p",
@@ -47,6 +56,8 @@ export function claudeArgs(offer, runner) {
     ...(runner.disallowedTools?.length ? ["--disallowedTools", runner.disallowedTools.join(",")] : []),
     "--settings",
     JSON.stringify({ disableAllHooks: true }),
+    "--append-system-prompt",
+    SHELL_RULES,
   ];
 }
 

@@ -45,6 +45,10 @@ test("the run is headless and fenced: restricted, no MCP, no hooks, prompts refu
   assert.match(a[a.indexOf("--disallowedTools") + 1], /git push/);
   assert.deepEqual(JSON.parse(a[a.indexOf("--settings") + 1]), { disableAllHooks: true });
   assert.equal(a.includes("--dangerously-skip-permissions"), false);
+  assert.match(a[a.indexOf("--append-system-prompt") + 1], /does not mean the others are refused/);
+  const allowed = a[a.indexOf("--allowedTools") + 1].split(",");
+  for (const r of ["Bash(git commit:*)", "Bash(cat:*)", "Bash(pnpm test:*)"]) assert.ok(allowed.includes(r), r);
+  for (const r of ["Bash(curl:*)", "Bash(git push:*)"]) assert.ok(!allowed.includes(r), r);
 });
 
 test("stream-json becomes short progress events", () => {
