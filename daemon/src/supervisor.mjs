@@ -116,8 +116,10 @@ export class Supervisor {
     try {
       await this.workspace.ensureClone(m.repository, phase);
       if (signal.aborted) throw new Canceled();
-      phase("worktree", `${m.branch} from ${m.baseBranch ?? m.repository.defaultBranch}`);
-      const wt = await this.workspace.createWorktree(m.repository, m.jobId, m.branch, m.baseBranch);
+      // A continuation starts from the job's own branch as the earlier run left it; a fresh run from its base.
+      const startFrom = m.startFrom ?? m.baseBranch;
+      phase("worktree", m.previous ? `${m.branch}, continuing from its last push` : `${m.branch} from ${startFrom ?? m.repository.defaultBranch}`);
+      const wt = await this.workspace.createWorktree(m.repository, m.jobId, m.branch, startFrom);
       cwd = wt.dir;
       const setup = this.config.repositories?.[m.repository.id]?.setup;
       if (setup) {

@@ -39,6 +39,15 @@ test("the prompt carries the issue and the rules of the run", () => {
   assert.match(p, /frozen-lockfile/);
 });
 
+test("a continuation tells the agent about the earlier attempt and that the branch already has its commits", () => {
+  const p = buildPrompt({ ...offer, startFrom: offer.branch, previous: { jobId: "j0", state: "failed", summary: "Edited a.ts\nTests still fail", error: "timed out" } });
+  assert.match(p, /This is a continuation/);
+  assert.match(p, /failed \(timed out\)/);
+  assert.match(p, /> Edited a\.ts\n> Tests still fail/);
+  assert.match(p, /already holds the earlier attempt's commits/);
+  assert.doesNotMatch(buildPrompt(offer), /continuation/);
+});
+
 test("the run is headless and fenced: restricted, no MCP, no hooks, prompts refused, push denied", () => {
   const a = claudeArgs(offer, DEFAULT_RUNNER);
   for (const f of ["-p", "--restricted", "--strict-mcp-config", "--verbose"]) assert.ok(a.includes(f), f);

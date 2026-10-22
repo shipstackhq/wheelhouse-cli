@@ -74,6 +74,30 @@ test("a worktree can start from another branch; a missing one is a clear error",
   await assert.rejects(ws.createWorktree(repository(), job, "wh/WH-2-z", "../x"), /refusing base/);
 });
 
+test("a continuation starts from the job's own pushed branch and counts only what it adds", async () => {
+  await ws.ensureClone(repository());
+  const first = "66666666-6666-6666-6666-666666666666";
+  const a = await ws.createWorktree(repository(), first, "wh/WH-3-cont", "main");
+  fs.writeFileSync(path.join(a.dir, "one.txt"), "1\n");
+  await ws.commitLeftovers(a.dir, "WH-3: one");
+  await ws.push(a.dir, "wh/WH-3-cont");
+  await ws.removeWorktree(REPO, first);
+  await ws.ensureClone(repository()); // the next run fetches, as every run does
+
+  const second = "77777777-7777-7777-7777-777777777777";
+  const b = await ws.createWorktree(repository(), second, "wh/WH-3-cont", "wh/WH-3-cont");
+  assert.equal(b.base, "origin/wh/WH-3-cont");
+  assert.equal(fs.existsSync(path.join(b.dir, "one.txt")), true, "the earlier run's work is there");
+  assert.equal((await ws.summary(b.dir, b.base)).ahead, 0, "nothing new yet");
+  fs.writeFileSync(path.join(b.dir, "two.txt"), "2\n");
+  await ws.commitLeftovers(b.dir, "WH-3: two");
+  const sum = await ws.summary(b.dir, b.base);
+  assert.deepEqual([sum.ahead, sum.diffStats.files], [1, 1], "only this run's commit counts");
+  await ws.push(b.dir, "wh/WH-3-cont");
+  assert.equal(g(origin, "rev-list", "--count", "main..wh/WH-3-cont"), "2", "both runs' commits on one branch");
+  await ws.removeWorktree(REPO, second);
+});
+
 test("a branch name that is not the job's shape is refused", async () => {
   await assert.rejects(ws.createWorktree(repository(), JOB, "main"), /refusing branch/);
   await assert.rejects(ws.createWorktree(repository(), JOB, "wh/../../etc"), /refusing branch/);

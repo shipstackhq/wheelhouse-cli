@@ -7,6 +7,19 @@
 
 import { spawn } from "node:child_process";
 
+/** For a continuation: what the earlier run was, how it ended, and what it said, so the agent builds on it instead of starting over. */
+function previousAttempt(offer) {
+  const p = offer.previous;
+  if (!p) return [];
+  const how = { succeeded: "finished", failed: "failed", canceled: "was stopped", lost: "was cut off" }[p.state] ?? p.state;
+  return [
+    `This is a continuation. An earlier attempt at this issue ${how}${p.error ? ` (${p.error})` : ""} and pushed its work to this branch.`,
+    p.summary ? `Its final words were:\n> ${p.summary.replace(/\n/g, "\n> ")}` : "It left no summary.",
+    "Start by reading what it did (git log and git diff against the base), then carry on from there. Do not redo what is already done.",
+    "",
+  ];
+}
+
 /** Build the agent's instructions from the issue. */
 export function buildPrompt(offer) {
   const { issue, repository, branch } = offer;
@@ -16,7 +29,10 @@ export function buildPrompt(offer) {
     issue.body?.trim() ? issue.body.trim() : "(The issue has no description.)",
     "",
     "---",
-    `You are in a fresh git worktree of ${repository.fullName ?? repository.name}, on the branch ${branch}, made from ${offer.baseBranch ?? repository.defaultBranch}.`,
+    ...previousAttempt(offer),
+    offer.previous
+      ? `You are in a git worktree of ${repository.fullName ?? repository.name}, on the branch ${branch}, which already holds the earlier attempt's commits. Its pull request (if any) targets ${offer.baseBranch ?? repository.defaultBranch}.`
+      : `You are in a fresh git worktree of ${repository.fullName ?? repository.name}, on the branch ${branch}, made from ${offer.baseBranch ?? repository.defaultBranch}.`,
     repository.pathLimit ? `This team's work is limited to ${repository.pathLimit} in this repository.` : null,
     "Make the change the issue asks for. Then check it, in proportion to what you changed: for a Markdown or other docs-only change run no tests at all; for code run the tests, lint and typecheck that cover the files you touched (one package or one test file, not the whole repository's suite), and fix what you broke.",
     "The worktree starts without installed dependencies. Install them only when a check you actually need requires it, never to look around, and prefer the frozen-lockfile form (for example `pnpm install --frozen-lockfile`).",

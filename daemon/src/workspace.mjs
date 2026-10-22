@@ -83,7 +83,11 @@ export class Workspace {
     });
   }
 
-  /** A new worktree for the job, on its own branch from origin/<base> (the branch the run was told to start from, else the default). */
+  /**
+   * A new worktree for the job, on its branch, from origin/<from>: the branch the run was told to start from (for a continuation, the
+   * job's own branch as the earlier run pushed it), else the repository's default. `base` in the answer is that start point, so the
+   * summary and the push count only what this run added.
+   */
   async createWorktree(repository, jobId, branch, baseBranch) {
     if (!SAFE_BRANCH.test(branch) || branch.includes("..")) throw new GitError(`refusing branch name ${branch}`);
     const repo = this.repoDir(repository.id);
