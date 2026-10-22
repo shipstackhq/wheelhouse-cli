@@ -15,8 +15,15 @@ export class HttpError extends Error {
 /** The device has been unpaired (or its key is not the one Wheelhouse knows): nothing will work until it is paired again. */
 export class UnpairedError extends Error {}
 
+/** A request that gets no answer in this long is given up on (a connection that died quietly, after the laptop slept, never answers). */
+export const REQUEST_TIMEOUT_MS = 30_000;
+/** The server sends a keep-alive every 25 seconds; a stream silent for this long is dead, and is dropped so the daemon reconnects. */
+export const STREAM_IDLE_MS = 75_000;
+
 export class Connection {
-  constructor({ server, deviceId, privateKey, fetch = globalThis.fetch, now = Date.now }) {
+  constructor({ server, deviceId, privateKey, fetch = globalThis.fetch, now = Date.now, requestTimeoutMs = REQUEST_TIMEOUT_MS, streamIdleMs = STREAM_IDLE_MS }) {
+    this.requestTimeoutMs = requestTimeoutMs;
+    this.streamIdleMs = streamIdleMs;
     this.server = server.replace(/\/+$/, "");
     this.deviceId = deviceId;
     this.privateKey = privateKey;
@@ -31,6 +38,7 @@ export class Connection {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({ assertion: makeAssertion(this.deviceId, this.privateKey, this.now()) }),
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
     });
     const body = await res.json().catch(() => null);
     if (res.status === 401) throw new UnpairedError("Wheelhouse no longer accepts this device's key; it was probably unpaired");
@@ -45,6 +53,7 @@ export class Connection {
       method,
       headers: { authorization: `Bearer ${await this.token()}`, accept: "application/json", ...(body !== undefined ? { "content-type": "application/json" } : {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
     });
     const json = await res.json().catch(() => null);
     if (res.status === 401 && !retried) {
@@ -64,19 +73,40 @@ export class Connection {
    * job: it knows the last id it handled.
    */
   async *stream(lastEventId, signal) {
-    const res = await this.fetch(`${this.server}/api/daemon/stream`, {
-      headers: { authorization: `Bearer ${await this.token()}`, accept: "text/event-stream", ...(lastEventId != null ? { "last-event-id": String(lastEventId) } : {}) },
-      signal,
-    });
-    if (res.status === 401) {
-      this.cached = null;
-      throw new HttpError(401, "unauthorized", "the stream refused the token");
-    }
-    if (!res.ok || !res.body) throw new HttpError(res.status, "http_error", `stream failed (${res.status})`);
-    const parser = new SseParser();
-    const decoder = new TextDecoder();
-    for await (const chunk of res.body) {
-      for (const m of parser.push(decoder.decode(chunk, { stream: true }))) yield m;
+    // One controller for the connection: it ends when the caller aborts, or when nothing (not even a keep-alive) arrives for too long.
+    const conn = new AbortController();
+    const onAbort = () => conn.abort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    let idle = null;
+    let wentQuiet = false;
+    const arm = () => {
+      clearTimeout(idle);
+      idle = setTimeout(() => ((wentQuiet = true), conn.abort()), this.streamIdleMs);
+    };
+    try {
+      arm();
+      const res = await this.fetch(`${this.server}/api/daemon/stream`, {
+        headers: { authorization: `Bearer ${await this.token()}`, accept: "text/event-stream", ...(lastEventId != null ? { "last-event-id": String(lastEventId) } : {}) },
+        signal: conn.signal,
+      });
+      if (res.status === 401) {
+        this.cached = null;
+        throw new HttpError(401, "unauthorized", "the stream refused the token");
+      }
+      if (!res.ok || !res.body) throw new HttpError(res.status, "http_error", `stream failed (${res.status})`);
+      const parser = new SseParser();
+      const decoder = new TextDecoder();
+      for await (const chunk of res.body) {
+        arm();
+        for (const m of parser.push(decoder.decode(chunk, { stream: true }))) yield m;
+      }
+    } catch (e) {
+      if (wentQuiet && !signal?.aborted) throw new Error(`the stream went quiet for ${Math.round(this.streamIdleMs / 1000)}s`);
+      throw e;
+    } finally {
+      clearTimeout(idle);
+      signal?.removeEventListener("abort", onAbort);
+      conn.abort();
     }
   }
 }

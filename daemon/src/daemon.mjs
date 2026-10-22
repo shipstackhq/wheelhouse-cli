@@ -84,11 +84,17 @@ export async function runDaemon({ signal } = {}) {
     const r = await conn.post("/api/daemon/hello", { version: VERSION, capabilities: caps, jobs: supervisor.running().map((id) => ({ id, state: "running" })) });
     if (r?.device?.poolSize && r.device.poolSize !== supervisor.poolSize) supervisor.settings({ type: "settings.update", poolSize: r.device.poolSize, chatModel: r.device.chatModel });
   };
+  // Only a change is logged (it stopped working, it works again), so the log shows when Wheelhouse could not hear this machine.
+  let heartbeatFailing = false;
   const heartbeat = setInterval(async () => {
     try {
       await conn.post("/api/daemon/heartbeat", { running: supervisor.running(), free: supervisor.free, onBattery: false });
+      if (heartbeatFailing) log("heartbeat: reaching Wheelhouse again");
+      heartbeatFailing = false;
     } catch (e) {
       if (e instanceof UnpairedError) stop.abort();
+      if (!heartbeatFailing) log(`heartbeat: cannot reach Wheelhouse (${e instanceof HttpError ? `${e.status} ${e.message}` : e.message}); it shows this machine offline until this works`);
+      heartbeatFailing = true;
     }
   }, HEARTBEAT_MS);
   heartbeat.unref();
