@@ -16,7 +16,7 @@ export function buildPrompt(offer) {
     issue.body?.trim() ? issue.body.trim() : "(The issue has no description.)",
     "",
     "---",
-    `You are in a fresh git worktree of ${repository.fullName ?? repository.name}, on the branch ${branch}, made from ${repository.defaultBranch}.`,
+    `You are in a fresh git worktree of ${repository.fullName ?? repository.name}, on the branch ${branch}, made from ${offer.baseBranch ?? repository.defaultBranch}.`,
     repository.pathLimit ? `This team's work is limited to ${repository.pathLimit} in this repository.` : null,
     "Make the change the issue asks for. Run the project's tests or checks where it has them, and fix what you broke.",
     `Commit your work on this branch with messages that start with "${issue.ref}: ". Do not push and do not switch branches: Wheelhouse pushes the branch when you finish.`,

@@ -57,6 +57,23 @@ test("clone once, worktree on the job's branch, commit what was left, push, and 
   assert.equal(fs.existsSync(dir), false);
 });
 
+test("a worktree can start from another branch; a missing one is a clear error", async () => {
+  const seed = path.join(tmp, "seed");
+  g(seed, "checkout", "-q", "-b", "staging");
+  fs.writeFileSync(path.join(seed, "STAGING.md"), "only on staging\n");
+  g(seed, "add", ".");
+  g(seed, "commit", "-m", "staging");
+  g(seed, "push", origin, "staging");
+  await ws.ensureClone(repository());
+  const job = "55555555-5555-5555-5555-555555555555";
+  const { dir, base } = await ws.createWorktree(repository(), job, "wh/WH-2-x", "staging");
+  assert.equal(base, "origin/staging");
+  assert.equal(fs.existsSync(path.join(dir, "STAGING.md")), true);
+  await ws.removeWorktree(REPO, job);
+  await assert.rejects(ws.createWorktree(repository(), job, "wh/WH-2-y", "nope"), /does not exist/);
+  await assert.rejects(ws.createWorktree(repository(), job, "wh/WH-2-z", "../x"), /refusing base/);
+});
+
 test("a branch name that is not the job's shape is refused", async () => {
   await assert.rejects(ws.createWorktree(repository(), JOB, "main"), /refusing branch/);
   await assert.rejects(ws.createWorktree(repository(), JOB, "wh/../../etc"), /refusing branch/);

@@ -83,13 +83,20 @@ export class Workspace {
     });
   }
 
-  /** A new worktree for the job, on its own branch from origin/<default branch>. */
-  async createWorktree(repository, jobId, branch) {
+  /** A new worktree for the job, on its own branch from origin/<base> (the branch the run was told to start from, else the default). */
+  async createWorktree(repository, jobId, branch, baseBranch) {
     if (!SAFE_BRANCH.test(branch) || branch.includes("..")) throw new GitError(`refusing branch name ${branch}`);
     const repo = this.repoDir(repository.id);
     const dir = this.worktreeDir(repository.id, jobId);
     fs.mkdirSync(path.dirname(dir), { recursive: true });
-    const base = `origin/${repository.defaultBranch || "main"}`;
+    const from = baseBranch || repository.defaultBranch || "main";
+    if (!/^[A-Za-z0-9._\/-]+$/.test(from) || from.startsWith("-") || from.includes("..")) throw new GitError(`refusing base branch ${from}`);
+    const base = `origin/${from}`;
+    try {
+      await git(repo, "rev-parse", "--verify", "--quiet", `${base}^{commit}`);
+    } catch {
+      throw new GitError(`the branch ${from} does not exist in ${repository.fullName ?? repository.name}`);
+    }
     await git(repo, "worktree", "add", "-B", branch, dir, base);
     return { dir, base };
   }
