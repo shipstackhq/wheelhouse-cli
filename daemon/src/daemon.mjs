@@ -5,6 +5,7 @@ import { capabilities } from "./capabilities.mjs";
 import { loadConfig, paths, updateConfig } from "./config.mjs";
 import { Connection, HttpError, UnpairedError } from "./connection.mjs";
 import { importPrivateKey, publicKeyFromRaw } from "./crypto.mjs";
+import { adoptUserPath, findClaude } from "./environment.mjs";
 import { loadKey } from "./keystore.mjs";
 import { runClaude } from "./runner/claude.mjs";
 import { JobRecords } from "./state.mjs";
@@ -51,6 +52,10 @@ export async function runDaemon({ signal } = {}) {
   const secret = loadKey(config.keystore, p.home);
   if (!secret) throw new Error(`The device key is missing from the ${config.keystore}. Pair again: wheelhouse-daemon pair --server ${config.server}`);
 
+  // Under launchd the PATH is bare: take the user's own, then find claude on it.
+  adoptUserPath();
+  const claudePath = findClaude(config.claudePath) ?? config.claudePath;
+
   const conn = new Connection({ server: config.server, deviceId: config.deviceId, privateKey: importPrivateKey(secret) });
   const workspace = new Workspace(p, { protocol: config.gitProtocol, log });
   const records = new JobRecords(p.jobs);
@@ -63,17 +68,18 @@ export async function runDaemon({ signal } = {}) {
     records,
     config,
     log,
-    runJob: ({ offer, cwd, signal: s, onEvent, onSpawn }) => runClaude({ offer, cwd, runner: config.runner, claudePath: config.claudePath, signal: s, onEvent, onSpawn }),
+    runJob: ({ offer, cwd, signal: s, onEvent, onSpawn }) => runClaude({ offer, cwd, runner: config.runner, claudePath, signal: s, onEvent, onSpawn }),
   });
   supervisor.onSettings = (s) => updateConfig({ poolSize: s.poolSize, chatModel: s.chatModel }, p);
 
   log(`wheelhouse-daemon ${VERSION}: ${config.name ?? "this machine"} → ${config.server} (${config.workspace?.name ?? "workspace"})`);
+  log(`claude: ${claudePath}`);
   const stop = new AbortController();
   signal?.addEventListener("abort", () => stop.abort(), { once: true });
 
   const hello = async () => {
-    const caps = await capabilities({ claudePath: config.claudePath, heldRepositories: workspace.held() });
-    if (!caps.claude.installed) log(`claude was not found at "${config.claudePath}": jobs will fail until it is installed`);
+    const caps = await capabilities({ claudePath, heldRepositories: workspace.held() });
+    if (!caps.claude.installed) log(`claude was not found (looked for "${config.claudePath}" on ${process.env.PATH}): jobs will fail until it is installed, or set "claudePath" in config.json`);
     else if (!caps.claude.signedIn) log("claude is installed but not signed in: run `claude` once and sign in");
     const r = await conn.post("/api/daemon/hello", { version: VERSION, capabilities: caps, jobs: supervisor.running().map((id) => ({ id, state: "running" })) });
     if (r?.device?.poolSize && r.device.poolSize !== supervisor.poolSize) supervisor.settings({ type: "settings.update", poolSize: r.device.poolSize, chatModel: r.device.chatModel });
