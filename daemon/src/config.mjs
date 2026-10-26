@@ -4,6 +4,7 @@
 //   config.json      the pairing (server, device id, the server's pinned key) and local settings; mode 0600
 //   repos/           one bare clone per repository, made on its first job
 //   worktrees/       one worktree per job
+//   chats/           one detached worktree per chat thread
 //   state/jobs/      a record per job in progress, so a restart can clean up after one it lost
 //   logs/            what launchd writes
 
@@ -17,6 +18,7 @@ export const paths = (home = daemonHome()) => ({
   config: path.join(home, "config.json"),
   repos: path.join(home, "repos"),
   worktrees: path.join(home, "worktrees"),
+  chats: path.join(home, "chats"),
   jobs: path.join(home, "state", "jobs"),
   logs: path.join(home, "logs"),
 });

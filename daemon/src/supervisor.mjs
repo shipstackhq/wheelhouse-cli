@@ -9,12 +9,16 @@ import { JobReporter } from "./connection.mjs";
 import { isRateLimited } from "./runner/claude.mjs";
 import { runSetup } from "./workspace.mjs";
 
-const MESSAGE_TYPES = new Set(["job.offer", "job.cancel", "settings.update"]);
+const MESSAGE_TYPES = new Set(["job.offer", "job.cancel", "settings.update", "chat.message", "chat.cancel"]);
+/** Why a run whose branch a newer run took over was stopped: its work is kept on this machine, not pushed. */
+export const SUPERSEDED_REASON = "Stopped: a newer run took over this branch while this machine could not be reached. Nothing was pushed; the worktree is kept here.";
+/** Chat answers run in their own small pool, apart from the jobs: they never take a job's slot and do not show in `free`. */
+export const CHAT_POOL_SIZE = 2;
 /** After a run hits the subscription's usage limit, new offers are refused for this long. */
 export const RATE_LIMIT_PAUSE_MS = 15 * 60_000;
 
 export class Supervisor {
-  constructor({ conn, deviceId, serverKey, poolSize, workspace, records, runJob, config, log = console.log, now = Date.now }) {
+  constructor({ conn, deviceId, serverKey, poolSize, workspace, records, runJob, runChat, config, log = console.log, now = Date.now, finishRetryMs }) {
     this.conn = conn;
     this.deviceId = deviceId;
     this.serverKey = serverKey;
@@ -22,10 +26,13 @@ export class Supervisor {
     this.workspace = workspace;
     this.records = records;
     this.runJob = runJob; // ({ offer, cwd, signal, onEvent, onSpawn }) => runner result
+    this.runChat = runChat; // ({ message, commit, cwd, signal, onEvent }) => runner result
     this.config = config;
     this.log = log;
     this.now = now;
+    this.finishRetryMs = finishRetryMs;
     this.jobs = new Map(); // jobId -> { offer, controller, done }
+    this.chats = new Map(); // messageId -> { message, controller, done }
     this.pausedUntil = 0;
     this.stopping = false;
     this.onSettings = () => {};
@@ -36,6 +43,10 @@ export class Supervisor {
   }
   running() {
     return [...this.jobs.keys()];
+  }
+  /** Jobs that ended here but whose finish Wheelhouse has not received yet: still ours, so they are listed with the running ones. */
+  pending() {
+    return (this.records.all?.() ?? []).filter((r) => r.pendingFinish).map((r) => r.id);
   }
 
   /** One message from the stream, `data` as sent: `{ message, signature }`. Returns what was done, for tests and the log. */
@@ -52,7 +63,9 @@ export class Supervisor {
     if (message.deviceId !== this.deviceId) return this.drop(`${event} for another device`);
     if (message.type !== event || !MESSAGE_TYPES.has(event)) return this.drop(`unknown message type ${event}`);
     if (event === "settings.update") return this.settings(message);
-    if (event === "job.cancel") return this.cancel(message.jobId);
+    if (event === "job.cancel") return this.cancel(message.jobId, { superseded: message.superseded === true });
+    if (event === "chat.cancel") return this.cancelChat(message.messageId);
+    if (event === "chat.message") return this.chat(message);
     return this.offer(message);
   }
 
@@ -68,10 +81,12 @@ export class Supervisor {
     return "settings";
   }
 
-  cancel(jobId) {
+  /** `superseded`: a newer run took this one's branch over, so it stops without committing or pushing anything. */
+  cancel(jobId, { superseded = false } = {}) {
     const job = this.jobs.get(jobId);
     if (!job) return "unknown job";
-    this.log(`job ${jobId}: cancel requested`);
+    this.log(`job ${jobId}: ${superseded ? "stop requested, a newer run took over its branch" : "cancel requested"}`);
+    if (superseded) job.superseded = true;
     job.controller.abort();
     return "canceling";
   }
@@ -105,14 +120,79 @@ export class Supervisor {
     return "accepted";
   }
 
+  cancelChat(messageId) {
+    const chat = this.chats.get(messageId);
+    if (!chat) return "unknown chat";
+    this.log(`chat ${messageId}: cancel requested`);
+    chat.controller.abort();
+    return "canceling";
+  }
+
+  /** A chat message that cannot be answered here is finished as failed, so the person sees why instead of waiting. */
+  async failChat(messageId, error) {
+    this.log(`chat ${messageId}: refused (${error})`);
+    await this.conn.post(`/api/daemon/chat/${messageId}/finish`, { state: "failed", error }).catch((e) => this.log(`chat ${messageId}: could not report (${e.message})`));
+    return "rejected";
+  }
+
+  async chat(m) {
+    if (typeof m.messageId !== "string") return this.drop("chat message without an id");
+    if (this.chats.has(m.messageId)) return "duplicate";
+    if (Date.parse(m.expiresAt) < this.now()) return this.drop(`expired chat message ${m.messageId}`);
+    if (!m.threadId || !m.model || typeof m.prompt !== "string" || !m.prompt || !m.repository?.id || !m.repository.cloneUrl) return this.failChat(m.messageId, "The message to this device was incomplete");
+    if (this.stopping) return this.failChat(m.messageId, "The daemon is stopping");
+    if (this.pausedUntil > this.now()) return this.failChat(m.messageId, "This machine is paused after hitting the Claude usage limit; try again later");
+    if (this.chats.size >= CHAT_POOL_SIZE) return this.failChat(m.messageId, `This device is already answering ${this.chats.size} chats; try again in a moment`);
+    const controller = new AbortController();
+    const chat = { message: m, controller, done: null };
+    this.chats.set(m.messageId, chat);
+    chat.done = this.executeChat(m, controller.signal).finally(() => this.chats.delete(m.messageId));
+    return "accepted";
+  }
+
+  /** One chat answer: the thread's worktree, the agent, the report. Never throws: every failure becomes the message's finish. */
+  async executeChat(m, signal) {
+    const reporter = new JobReporter(this.conn, m.messageId, { path: `/api/daemon/chat/${m.messageId}`, log: this.log, ...(this.finishRetryMs === undefined ? {} : { finishRetryMs: this.finishRetryMs }) });
+    let outcome;
+    try {
+      await this.workspace.ensureClone(m.repository);
+      if (signal.aborted) throw new Canceled();
+      const wt = await this.workspace.chatWorktree(m.repository, m.threadId);
+      const r = await this.runChat({
+        message: m,
+        checkout: wt,
+        cwd: wt.dir,
+        signal,
+        onEvent: (e) => (e.type === "delta" || e.type === "tool") && reporter.event(e.type, e.data),
+      });
+      // An answer may talk about rate limits; only a run that failed on one pauses the machine.
+      if (r.result?.isError && isRateLimited(r.result.text)) {
+        this.pausedUntil = this.now() + RATE_LIMIT_PAUSE_MS;
+        this.log(`usage limit reached: refusing new work for ${RATE_LIMIT_PAUSE_MS / 60_000} minutes`);
+      }
+      const result = { sessionId: r.result?.sessionId ?? undefined, costUsd: r.result?.costUsd ?? undefined };
+      if (r.stopped === "canceled" || signal.aborted) outcome = { state: "canceled", ...result, error: this.stopReason() };
+      else if (r.stopped === "timeout") outcome = { state: "failed", ...result, error: "The answer took too long and was stopped" };
+      else if (!r.ok) outcome = { state: "failed", ...result, error: r.error ?? r.result?.text ?? (r.stderr || `claude exited with ${r.exitCode}`) };
+      else outcome = { state: "done", ...result, text: r.result.text };
+    } catch (e) {
+      outcome = e instanceof Canceled || signal.aborted ? { state: "canceled", error: this.stopReason() } : { state: "failed", error: e.message };
+    }
+    await reporter.finish(outcome);
+    this.log(`chat ${m.messageId}: ${outcome.state}${outcome.error ? ` (${outcome.error})` : ""}`);
+    return outcome;
+  }
+
   /** The job itself: worktree, setup, agent, commit, push, report. Never throws: every failure becomes the job's finish. */
   async execute(m, signal) {
-    const reporter = new JobReporter(this.conn, m.jobId, { log: this.log });
+    const reporter = new JobReporter(this.conn, m.jobId, { log: this.log, ...(this.finishRetryMs === undefined ? {} : { finishRetryMs: this.finishRetryMs }) });
     const started = this.now();
     const phase = (name, detail) => reporter.event("phase", detail ? { phase: name, detail } : { phase: name });
     this.records.write({ id: m.jobId, repositoryId: m.repository.id, branch: m.branch, startedAt: new Date(started).toISOString(), pid: null });
     let cwd = null;
     let outcome;
+    const superseded = () => this.jobs.get(m.jobId)?.superseded === true;
+    const stopped = () => (superseded() ? SUPERSEDED_REASON : this.stopReason());
     try {
       await this.workspace.ensureClone(m.repository, phase);
       if (signal.aborted) throw new Canceled();
@@ -139,7 +219,12 @@ export class Supervisor {
         this.pausedUntil = this.now() + RATE_LIMIT_PAUSE_MS;
         this.log(`usage limit reached: refusing new jobs for ${RATE_LIMIT_PAUSE_MS / 60_000} minutes`);
       }
-      // Whatever happened, keep the agent's work: commit what it left and push the branch if there is anything on it.
+      // Whatever happened, keep the agent's work: commit what it left and push the branch if there is anything on it. Not when a newer
+      // run took the branch over: pushing could overwrite its commits, so the work stays in this worktree for a person to look at.
+      if (superseded()) {
+        outcome = { state: "canceled", pushed: false, costUsd: r.result?.costUsd ?? null, error: SUPERSEDED_REASON };
+        throw new Superseded();
+      }
       phase("pushing", m.branch);
       await this.workspace.commitLeftovers(cwd, `${m.issue.ref}: work in progress from the agent run`);
       const sum = await this.workspace.summary(cwd, wt.base);
@@ -149,16 +234,21 @@ export class Supervisor {
         pushed = true;
       }
       const result = { commit: sum.commit, pushed, diffStats: sum.diffStats, costUsd: r.result?.costUsd ?? null, durationMs: this.now() - started };
-      if (r.stopped === "canceled" || signal.aborted) outcome = { state: "canceled", ...result, error: this.stopReason() };
+      if (r.stopped === "canceled" || signal.aborted) outcome = { state: "canceled", ...result, error: stopped() };
       else if (r.stopped === "timeout") outcome = { state: "failed", ...result, error: `The agent ran past the ${this.config.runner.timeoutMinutes}-minute limit` };
       else if (!r.ok) outcome = { state: "failed", ...result, error: r.error ?? r.result?.text ?? (r.stderr || `claude exited with ${r.exitCode}`) };
       else outcome = { state: "succeeded", ...result };
     } catch (e) {
-      outcome = e instanceof Canceled || signal.aborted ? { state: "canceled", error: this.stopReason() } : { state: "failed", error: e.message };
-      reporter.event("error", { message: String(e.message).slice(0, 1000) });
+      if (!(e instanceof Superseded)) {
+        outcome = e instanceof Canceled || signal.aborted ? { state: "canceled", error: stopped() } : { state: "failed", error: e.message };
+        reporter.event("error", { message: String(e.message).slice(0, 1000) });
+      }
     }
-    await reporter.finish({ ...outcome, durationMs: this.now() - started });
-    this.records.remove(m.jobId);
+    const report = { ...outcome, durationMs: this.now() - started };
+    const { retry } = await reporter.finish(report);
+    // A finish that could not get through (no connection) is kept with the job's record and sent again once Wheelhouse is reachable.
+    if (retry) this.records.update(m.jobId, { pendingFinish: report });
+    else this.records.remove(m.jobId);
     if (cwd && outcome.state === "succeeded" && outcome.pushed) await this.workspace.removeWorktree(m.repository.id, m.jobId).catch(() => {});
     this.log(`job ${m.jobId}: ${outcome.state}${outcome.error ? ` (${outcome.error})` : ""}`);
     return outcome;
@@ -169,13 +259,16 @@ export class Supervisor {
     return this.stopping ? "The daemon was stopped while this ran. Run it again once it is back." : "Stopped on request";
   }
 
-  /** Stop taking work and cancel what is running; resolves when every job has reported. */
+  /** Stop taking work and cancel what is running; resolves when every job and chat has reported. */
   async shutdown() {
     this.stopping = true;
-    for (const j of this.jobs.values()) j.controller.abort();
-    await Promise.all([...this.jobs.values()].map((j) => j.done));
+    const all = [...this.jobs.values(), ...this.chats.values()];
+    for (const j of all) j.controller.abort();
+    await Promise.all(all.map((j) => j.done));
   }
 }
+
+class Superseded extends Error {}
 
 class Canceled extends Error {
   constructor() {

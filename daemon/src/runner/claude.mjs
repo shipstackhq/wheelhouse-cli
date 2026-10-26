@@ -78,13 +78,13 @@ export function claudeArgs(offer, runner) {
   ];
 }
 
-const short = (s, n = 300) => {
+export const short = (s, n = 300) => {
   const t = String(s ?? "").replace(/\s+/g, " ").trim();
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 };
 
 /** What to show for a tool call: the file, the command, the pattern. */
-function toolSummary(name, input = {}) {
+export function toolSummary(name, input = {}) {
   if (input.file_path) return short(input.file_path, 160);
   if (input.command) return short(input.command, 160);
   if (input.pattern) return short(input.pattern, 120);
@@ -130,12 +130,13 @@ export function eventsFrom(line) {
 export const isRateLimited = (text) => /usage limit|rate limit|429|limit reached|overloaded/i.test(String(text ?? ""));
 
 /**
- * Run claude in `cwd`. Resolves { ok, result, stderr, exitCode } when it ends; `signal` stops it (SIGTERM to its process group, then
- * SIGKILL after ten seconds). `onEvent` gets each progress event; `onSpawn` the child's pid, for the job record.
+ * Run claude in `cwd` with `args`. Resolves { ok, result, stderr, exitCode } when it ends; `signal` stops it (SIGTERM to its process
+ * group, then SIGKILL after ten seconds). `parse` turns each stdout line into progress events, `onEvent` gets them; `onSpawn` the
+ * child's pid, for the job record. Shared by jobs and chats.
  */
-export function runClaude({ offer, cwd, runner, claudePath = "claude", signal, onEvent = () => {}, onSpawn = () => {}, timeoutMs }) {
+export function runCli({ args, cwd, claudePath = "claude", signal, parse = eventsFrom, onEvent = () => {}, onSpawn = () => {}, timeoutMs }) {
   return new Promise((resolve) => {
-    const child = spawn(claudePath, claudeArgs(offer, runner), { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "wheelhouse-daemon" } });
+    const child = spawn(claudePath, args, { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "wheelhouse-daemon" } });
     onSpawn(child.pid);
     let result = null;
     let stderr = "";
@@ -157,7 +158,7 @@ export function runClaude({ offer, cwd, runner, claudePath = "claude", signal, o
         }
       }, 10_000).unref();
     };
-    const timer = setTimeout(() => stop("timeout"), timeoutMs ?? runner.timeoutMinutes * 60_000);
+    const timer = setTimeout(() => stop("timeout"), timeoutMs);
     const onAbort = () => stop("canceled");
     signal?.addEventListener("abort", onAbort);
     if (signal?.aborted) onAbort();
@@ -169,7 +170,7 @@ export function runClaude({ offer, cwd, runner, claudePath = "claude", signal, o
       while ((i = buf.indexOf("\n")) >= 0) {
         const line = buf.slice(0, i);
         buf = buf.slice(i + 1);
-        for (const e of eventsFrom(line)) {
+        for (const e of parse(line)) {
           if (e.type === "result") result = e.data;
           onEvent(e);
         }
@@ -186,3 +187,6 @@ export function runClaude({ offer, cwd, runner, claudePath = "claude", signal, o
     child.on("close", (code) => done(code, null));
   });
 }
+
+/** Run one job's agent in `cwd`. `timeoutMs` defaults to the runner's limit. */
+export const runClaude = ({ offer, cwd, runner, timeoutMs = runner.timeoutMinutes * 60_000, ...rest }) => runCli({ args: claudeArgs(offer, runner), cwd, timeoutMs, ...rest });

@@ -1,6 +1,6 @@
 // Clones and worktrees. The daemon never looks for repositories on the disk: it clones each one into its own folder the first time a
 // job needs it (with the user's own git credentials), keeps it, and gives every job a fresh worktree on the job's branch from the
-// repository's default branch. The user's own checkouts are never touched.
+// repository's default branch, and every chat thread a detached one on that branch's tip. The user's own checkouts are never touched.
 
 import { execFile } from "node:child_process";
 import fs from "node:fs";
@@ -39,9 +39,9 @@ export class Workspace {
     if (!SAFE_ID.test(repositoryId)) throw new GitError(`bad repository id ${repositoryId}`);
     return path.join(this.p.repos, `${repositoryId}.git`);
   }
-  worktreeDir(repositoryId, jobId) {
+  worktreeDir(repositoryId, jobId, root = this.p.worktrees) {
     if (!SAFE_ID.test(repositoryId) || !SAFE_ID.test(jobId)) throw new GitError("bad id");
-    return path.join(this.p.worktrees, repositoryId, jobId);
+    return path.join(root, repositoryId, jobId);
   }
 
   /** The repository ids this machine already holds a clone of. */
@@ -101,8 +101,62 @@ export class Workspace {
     } catch {
       throw new GitError(`the branch ${from} does not exist in ${repository.fullName ?? repository.name}`);
     }
+    // Continuing a stopped or lost run: its kept worktree still has the branch checked out, and git will not check one branch out twice.
+    // Save what it left, free the branch, and pick it up where it was (its commits may never have been pushed).
+    const holder = await this.worktreeHolding(repo, branch);
+    if (holder) {
+      await this.commitLeftovers(holder, `${branch}: work left by the stopped run`).catch(() => {});
+      await git(repo, "worktree", "remove", "--force", holder).catch(async () => {
+        fs.rmSync(holder, { recursive: true, force: true });
+        await git(repo, "worktree", "prune").catch(() => {});
+      });
+      await git(repo, "worktree", "add", dir, branch);
+      return { dir, base };
+    }
     await git(repo, "worktree", "add", "-B", branch, dir, base);
     return { dir, base };
+  }
+
+  /**
+   * The chat thread's worktree: detached (no branch, so nothing a job uses), made on first use at the tip of origin/<default branch>.
+   * After that it stays where it is, since the chat may have moved it to another branch (`git checkout --detach origin/<branch>`) and
+   * should find it there on the next message. Its folder is touched each time, so it is pruned only when the thread goes unused.
+   * Answers `{ dir, commit, branches }` (the origin/… branches whose tip it is on); the caller has fetched (ensureClone).
+   */
+  async chatWorktree(repository, threadId) {
+    const repo = this.repoDir(repository.id);
+    const dir = this.worktreeDir(repository.id, threadId, this.p.chats);
+    if (!fs.existsSync(path.join(dir, ".git"))) {
+      const from = repository.defaultBranch || "main";
+      if (!/^[A-Za-z0-9._\/-]+$/.test(from) || from.startsWith("-") || from.includes("..")) throw new GitError(`refusing base branch ${from}`);
+      const base = `origin/${from}`;
+      try {
+        await git(repo, "rev-parse", "--verify", "--quiet", `${base}^{commit}`);
+      } catch {
+        throw new GitError(`the branch ${from} does not exist in ${repository.fullName ?? repository.name}`);
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.mkdirSync(path.dirname(dir), { recursive: true });
+      await git(repo, "worktree", "prune").catch(() => {});
+      await git(repo, "worktree", "add", "--detach", dir, base);
+    }
+    const now = new Date();
+    fs.utimesSync(dir, now, now);
+    const branches = (await git(dir, "branch", "-r", "--points-at", "HEAD", "--format=%(refname)"))
+      .split("\n")
+      .filter((r) => r.startsWith("refs/remotes/") && !r.endsWith("/HEAD"))
+      .map((r) => r.slice("refs/remotes/".length));
+    return { dir, commit: await git(dir, "rev-parse", "HEAD"), branches };
+  }
+
+  /** The folder of another worktree of this clone that has `branch` checked out, or null. */
+  async worktreeHolding(repo, branch) {
+    const list = await git(repo, "worktree", "list", "--porcelain");
+    for (const block of list.split(/\n\n+/)) {
+      const dir = /^worktree (.+)$/m.exec(block)?.[1];
+      if (dir && new RegExp(`^branch refs/heads/${branch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m").test(block) && path.resolve(dir) !== path.resolve(repo)) return dir;
+    }
+    return null;
   }
 
   /** Commit what the agent left uncommitted, so nothing is lost when the worktree goes. False when there was nothing. */
@@ -128,8 +182,8 @@ export class Workspace {
     await run("git", ["push", "--force-with-lease", "origin", `HEAD:refs/heads/${branch}`], { cwd: dir, timeout: 10 * 60_000 });
   }
 
-  async removeWorktree(repositoryId, jobId) {
-    const dir = this.worktreeDir(repositoryId, jobId);
+  async removeWorktree(repositoryId, jobId, root) {
+    const dir = this.worktreeDir(repositoryId, jobId, root);
     try {
       await git(this.repoDir(repositoryId), "worktree", "remove", "--force", dir);
     } catch {
@@ -138,22 +192,23 @@ export class Workspace {
     }
   }
 
-  /** Remove worktrees kept from failed runs once they are older than `hours`. */
-  async pruneOld(hours) {
-    const cutoff = Date.now() - hours * 3600_000;
-    for (const repo of this.held()) {
-      const root = path.join(this.p.worktrees, repo);
-      let entries = [];
-      try {
-        entries = fs.readdirSync(root);
-      } catch {
-        continue;
-      }
-      for (const job of entries) {
+  /** Remove worktrees kept from failed runs once they are older than `hours`, and chat worktrees unused for `chatHours`. */
+  async pruneOld(hours, chatHours = 24) {
+    for (const [root, age] of [[this.p.worktrees, hours], [this.p.chats, chatHours]]) {
+      const cutoff = Date.now() - age * 3600_000;
+      for (const repo of this.held()) {
+        let entries = [];
         try {
-          if (fs.statSync(path.join(root, job)).mtimeMs < cutoff) await this.removeWorktree(repo, job);
-        } catch (e) {
-          this.log(`could not prune worktree ${repo}/${job}: ${e.message}`);
+          entries = fs.readdirSync(path.join(root, repo));
+        } catch {
+          continue;
+        }
+        for (const id of entries) {
+          try {
+            if (fs.statSync(path.join(root, repo, id)).mtimeMs < cutoff) await this.removeWorktree(repo, id, root);
+          } catch (e) {
+            this.log(`could not prune worktree ${repo}/${id}: ${e.message}`);
+          }
         }
       }
     }

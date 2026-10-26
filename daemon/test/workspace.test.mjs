@@ -103,3 +103,57 @@ test("a branch name that is not the job's shape is refused", async () => {
   await assert.rejects(ws.createWorktree(repository(), JOB, "wh/../../etc"), /refusing branch/);
   assert.throws(() => ws.repoDir("../../x"), /bad repository id/);
 });
+
+test("continuing a stopped run whose kept worktree still holds the branch: its leftovers are saved and the branch is picked up", async () => {
+  await ws.ensureClone(repository());
+  const first = "77777777-7777-7777-7777-777777777777";
+  const second = "88888888-8888-8888-8888-888888888888";
+  const a = await ws.createWorktree(repository(), first, "wh/WH-4-stopped", "main");
+  fs.writeFileSync(path.join(a.dir, "half.txt"), "half done\n");
+  const b = await ws.createWorktree(repository(), second, "wh/WH-4-stopped", "main");
+  assert.equal(fs.existsSync(a.dir), false, "the stopped run's worktree is gone");
+  assert.equal(fs.readFileSync(path.join(b.dir, "half.txt"), "utf8"), "half done\n");
+  await ws.removeWorktree(REPO, second);
+});
+
+test("a chat worktree is detached, reused for the thread, and stays where the chat moved it", async () => {
+  const thread = "99999999-9999-9999-9999-999999999999";
+  await ws.ensureClone(repository());
+  const a = await ws.chatWorktree(repository(), thread);
+  assert.equal(a.dir, path.join(tmp, "home", "chats", REPO, thread));
+  assert.equal(g(a.dir, "branch", "--show-current"), "", "detached: no branch");
+  assert.equal(a.commit, g(origin, "rev-parse", "refs/heads/main"));
+  assert.deepEqual(a.branches, ["origin/main"]);
+  const seed = path.join(tmp, "seed");
+  g(seed, "checkout", "-q", "main");
+  fs.writeFileSync(path.join(seed, "later.md"), "later\n");
+  g(seed, "add", ".");
+  g(seed, "commit", "-m", "later");
+  g(seed, "push", origin, "main");
+  await ws.ensureClone(repository());
+  const b = await ws.chatWorktree(repository(), thread);
+  assert.equal(b.dir, a.dir, "the same folder");
+  assert.equal(b.commit, a.commit, "not moved by the daemon");
+  assert.deepEqual(b.branches, [], "no longer the tip of main");
+  // The chat moves its own checkout, and the next message finds it there.
+  g(b.dir, "checkout", "-q", "--detach", "origin/main");
+  const c = await ws.chatWorktree(repository(), thread);
+  assert.equal(c.commit, g(origin, "rev-parse", "refs/heads/main"));
+  assert.deepEqual(c.branches, ["origin/main"]);
+  assert.equal(fs.existsSync(path.join(c.dir, "later.md")), true);
+  // A new thread starts from the default branch, which must exist.
+  await assert.rejects(ws.chatWorktree({ ...repository(), defaultBranch: "nope" }, "88888888-8888-8888-8888-888888888888"), /does not exist/);
+});
+
+test("pruning removes chat worktrees unused for a day and keeps the recent ones", async () => {
+  const old = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  const fresh = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+  await ws.ensureClone(repository());
+  const a = await ws.chatWorktree(repository(), old);
+  const b = await ws.chatWorktree(repository(), fresh);
+  const twoDays = new Date(Date.now() - 48 * 3600_000);
+  fs.utimesSync(a.dir, twoDays, twoDays);
+  await ws.pruneOld(24);
+  assert.equal(fs.existsSync(a.dir), false);
+  assert.equal(fs.existsSync(b.dir), true);
+});

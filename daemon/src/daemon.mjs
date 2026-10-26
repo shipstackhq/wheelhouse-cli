@@ -7,6 +7,7 @@ import { Connection, HttpError, UnpairedError } from "./connection.mjs";
 import { importPrivateKey, publicKeyFromRaw } from "./crypto.mjs";
 import { adoptUserPath, findClaude } from "./environment.mjs";
 import { loadKey } from "./keystore.mjs";
+import { runChat } from "./runner/chat.mjs";
 import { runClaude } from "./runner/claude.mjs";
 import { JobRecords } from "./state.mjs";
 import { Supervisor } from "./supervisor.mjs";
@@ -27,9 +28,39 @@ const sleep = (ms, signal) =>
     signal?.addEventListener("abort", () => (clearTimeout(t), resolve()), { once: true });
   });
 
+/**
+ * Send a job's finish. Done once it is received, or refused for good (the job is settled some other way); a failure that may pass (no
+ * connection, a server error) keeps the finish with the job's record, so it is sent again on the next connect.
+ */
+async function reportFinish({ conn, records, log }, id, body) {
+  try {
+    await conn.post(`/api/daemon/jobs/${id}/finish`, body);
+    records.remove(id);
+    return true;
+  } catch (e) {
+    if (e instanceof HttpError && e.status < 500 && e.status !== 429) {
+      log(`job ${id}: Wheelhouse did not take the finish (${e.message})`);
+      records.remove(id);
+      return true;
+    }
+    records.update(id, { pendingFinish: body });
+    log(`job ${id}: could not report (${e.message}); will try again when Wheelhouse is reachable`);
+    return false;
+  }
+}
+
+/** Finishes that have not got through yet, sent now that the line is up. */
+async function replayFinishes(ctx) {
+  for (const r of ctx.records.all()) {
+    if (!r.pendingFinish) continue;
+    if (await reportFinish(ctx, r.id, r.pendingFinish)) ctx.log(`job ${r.id}: reported (${r.pendingFinish.state})`);
+  }
+}
+
 /** A job a previous run of the daemon was doing when it stopped: stop the agent if it is still alive, and report the job failed. */
 async function recover({ conn, records, workspace }) {
   for (const r of records.all()) {
+    if (r.pendingFinish) continue; // it ended; the finish is sent with the others once connected
     if (r.pid) {
       try {
         process.kill(-r.pid, "SIGTERM");
@@ -38,9 +69,8 @@ async function recover({ conn, records, workspace }) {
         /* not running any more */
       }
     }
-    await conn.post(`/api/daemon/jobs/${r.id}/finish`, { state: "failed", error: "The daemon restarted while the job ran" }).catch((e) => log(`job ${r.id}: could not report (${e.message})`));
-    records.remove(r.id);
-    log(`job ${r.id}: reported as failed after a restart (its worktree is kept for a look)`);
+    await reportFinish({ conn, records, log }, r.id, { state: "failed", error: "The daemon restarted while the job ran" });
+    log(`job ${r.id}: failed after a restart (its worktree is kept for a look)`);
   }
   await workspace.pruneOld(loadConfig().keepFailedHours).catch(() => {});
 }
@@ -69,6 +99,7 @@ export async function runDaemon({ signal } = {}) {
     config,
     log,
     runJob: ({ offer, cwd, signal: s, onEvent, onSpawn }) => runClaude({ offer, cwd, runner: config.runner, claudePath, signal: s, onEvent, onSpawn }),
+    runChat: ({ message, checkout, cwd, signal: s, onEvent }) => runChat({ message, checkout, cwd, claudePath, signal: s, onEvent }),
   });
   supervisor.onSettings = (s) => updateConfig({ poolSize: s.poolSize, chatModel: s.chatModel }, p);
 
@@ -81,14 +112,14 @@ export async function runDaemon({ signal } = {}) {
     const caps = await capabilities({ claudePath, heldRepositories: workspace.held() });
     if (!caps.claude.installed) log(`claude was not found (looked for "${config.claudePath}" on ${process.env.PATH}): jobs will fail until it is installed, or set "claudePath" in config.json`);
     else if (!caps.claude.signedIn) log("claude is installed but not signed in: run `claude` once and sign in");
-    const r = await conn.post("/api/daemon/hello", { version: VERSION, capabilities: caps, jobs: supervisor.running().map((id) => ({ id, state: "running" })) });
+    const r = await conn.post("/api/daemon/hello", { version: VERSION, capabilities: caps, jobs: [...supervisor.running(), ...supervisor.pending()].map((id) => ({ id, state: "running" })) });
     if (r?.device?.poolSize && r.device.poolSize !== supervisor.poolSize) supervisor.settings({ type: "settings.update", poolSize: r.device.poolSize, chatModel: r.device.chatModel });
   };
   // Only a change is logged (it stopped working, it works again), so the log shows when Wheelhouse could not hear this machine.
   let heartbeatFailing = false;
   const heartbeat = setInterval(async () => {
     try {
-      await conn.post("/api/daemon/heartbeat", { running: supervisor.running(), free: supervisor.free, onBattery: false });
+      await conn.post("/api/daemon/heartbeat", { running: [...supervisor.running(), ...supervisor.pending()], free: supervisor.free, onBattery: false });
       if (heartbeatFailing) log("heartbeat: reaching Wheelhouse again");
       heartbeatFailing = false;
     } catch (e) {
@@ -108,6 +139,7 @@ export async function runDaemon({ signal } = {}) {
       try {
         await hello();
         log("connected");
+        await replayFinishes({ conn, records, log });
         for await (const m of conn.stream(lastEventId, stop.signal)) {
           failures = 0;
           await supervisor.handle(m);

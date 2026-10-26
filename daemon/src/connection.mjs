@@ -155,12 +155,14 @@ export class SseParser {
  * waiting, the oldest are dropped so a long outage cannot eat memory.
  */
 export class JobReporter {
-  constructor(conn, jobId, { flushMs = 250, batch = 50, maxQueued = 2000, log = () => {} } = {}) {
+  constructor(conn, jobId, { path = `/api/daemon/jobs/${jobId}`, flushMs = 250, batch = 50, maxQueued = 2000, finishRetryMs = 1000, log = () => {} } = {}) {
     this.conn = conn;
     this.jobId = jobId;
+    this.path = path; // where this run's events and finish go: a job's, or a chat message's
     this.flushMs = flushMs;
     this.batch = batch;
     this.maxQueued = maxQueued;
+    this.finishRetryMs = finishRetryMs;
     this.log = log;
     this.seq = 0;
     this.queue = [];
@@ -184,7 +186,7 @@ export class JobReporter {
     const batch = this.queue.slice(0, 200);
     this.sending = (async () => {
       try {
-        await this.conn.post(`/api/daemon/jobs/${this.jobId}/events`, { events: batch });
+        await this.conn.post(`${this.path}/events`, { events: batch });
         this.queue.splice(0, batch.length);
         this.failures = 0;
       } catch (e) {
@@ -200,20 +202,25 @@ export class JobReporter {
     return this.sending;
   }
 
-  /** Send what is left (a few tries), then the final state. */
+  /**
+   * Send what is left (a few tries), then the final state. Returns `{ sent, retry }`: `retry` is true when the finish did not get
+   * through for a reason that may pass (no connection, a server error), so the caller keeps it and sends it again later.
+   */
   async finish(result) {
     for (let i = 0; i < 5 && this.queue.length; i++) await this.flush();
     if (this.timer) clearTimeout(this.timer);
     let lastError;
     for (let i = 0; i < 5; i++) {
       try {
-        return await this.conn.post(`/api/daemon/jobs/${this.jobId}/finish`, result);
+        await this.conn.post(`${this.path}/finish`, result);
+        return { sent: true, retry: false };
       } catch (e) {
         lastError = e;
-        if (e instanceof HttpError && e.status < 500 && e.status !== 429) break;
-        await new Promise((r) => setTimeout(r, 1000 * 2 ** i));
+        if (e instanceof HttpError && e.status < 500 && e.status !== 429) return (this.log(`job ${this.jobId}: could not report the finish (${e.message})`), { sent: false, retry: false });
+        await new Promise((r) => setTimeout(r, this.finishRetryMs * 2 ** i));
       }
     }
-    this.log(`job ${this.jobId}: could not report the finish (${lastError?.message})`);
+    this.log(`job ${this.jobId}: could not report the finish (${lastError?.message}); keeping it to send when Wheelhouse is reachable`);
+    return { sent: false, retry: true };
   }
 }
