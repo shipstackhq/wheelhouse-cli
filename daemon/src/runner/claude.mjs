@@ -85,6 +85,8 @@ export const short = (s, n = 300) => {
 
 /** What to show for a tool call: the file, the command, the pattern. */
 export function toolSummary(name, input = {}) {
+  const mcp = /^mcp__([^_]+)__(.+)$/.exec(name); // an MCP tool: "wheelhouse: get_issue WH-42"
+  if (mcp) return short(`${mcp[1]}: ${mcp[2]} ${[input.ref, input.id, input.key, input.query].find((v) => typeof v === "string") ?? ""}`.trim(), 160);
   if (input.file_path) return short(input.file_path, 160);
   if (input.command) return short(input.command, 160);
   if (input.pattern) return short(input.pattern, 120);
