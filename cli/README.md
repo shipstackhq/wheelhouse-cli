@@ -4,17 +4,17 @@
 npm install -g @shipstack/wheelhouse-cli
 ```
 
-The command-line companion for Shipstack Wheelhouse. It links a repository to a Wheelhouse project, reports what lands on the default branch, and runs the Claude Code hooks that keep the board and knowledge map in sync.
+The command-line companion for Shipstack Wheelhouse. It links a repository to a Wheelhouse team, reports what lands on the default branch, and runs the Claude Code hooks that keep the board and knowledge map in sync.
 
 It has no dependencies and runs on Node 18+ with git.
 
 ## Commands
 
 ```
-wheelhouse init --project KEY [--url URL] [--key wh_...] link this repo, install git hooks, record baseline hashes
+wheelhouse init --team KEY [--url URL] [--key wh_...] link this repo, install git hooks, record baseline hashes
 wheelhouse login [--url URL]                             prompt (URL defaults to https://wheelhouse.shipstack.run) for an API key (hidden), check it, store it (scripts: --url URL --key wh_...) (~/.config/wheelhouse/credentials.json, mode 600)
 wheelhouse status                                        config and server state
-wheelhouse context [TICKET]                              print the project briefing (and write .wheelhouse/context.md) or a ticket's context pack
+wheelhouse context [ISSUE]                               print the team briefing (and write .wheelhouse/context.md) or an issue's context
 wheelhouse sync                                          report working-copy changes as a session (for workflows without Claude Code)
 wheelhouse land [--baseline|--flush] [--from REF --to REF]  report what landed on the default branch. Git hooks only queue it locally; --flush sends the queue
 wheelhouse hook <event>                                  Claude Code hook runner (used by the plugin)
@@ -22,7 +22,7 @@ wheelhouse hook <event>                                  Claude Code hook runner
 
 ## Configuration
 
-`wheelhouse.json` at the repo root holds `url`, `project` and `defaultBranch`. Commit it.
+`wheelhouse.json` at the repo root holds `url`, `team` and `defaultBranch`. Commit it.
 
 The API key is resolved in this order:
 
@@ -31,7 +31,7 @@ The API key is resolved in this order:
 3. the Claude Code plugin's `api_key` option
 4. `~/.config/wheelhouse/credentials.json`
 
-`WHEELHOUSE_URL` and `WHEELHOUSE_PROJECT` override the file.
+`WHEELHOUSE_URL` and `WHEELHOUSE_TEAM` override the file.
 
 ## How sync works
 
