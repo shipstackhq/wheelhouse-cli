@@ -37,6 +37,8 @@ export function buildPrompt(offer) {
     "Make the change the issue asks for. Then check it, in proportion to what you changed: for a Markdown or other docs-only change run no tests at all; for code run the tests, lint and typecheck that cover the files you touched (one package or one test file, not the whole repository's suite), and fix what you broke.",
     "The worktree starts without installed dependencies. Install them only when a check you actually need requires it, never to look around, and prefer the frozen-lockfile form (for example `pnpm install --frozen-lockfile`).",
     `Commit your work on this branch with messages that start with "${issue.ref}: ". Do not push and do not switch branches: Wheelhouse pushes the branch when you finish.`,
+    // WH-115: an agent's profile lists what "done" means and when to ask; the run honours both.
+    offer.agent ? 'Before you finish, check every item under "Done means" in your instructions and fix what is not met. If one of your "Ask instead of guessing" cases comes up, stop there and finish with a summary that starts with "QUESTION:" and asks it.' : null,
     "Finish with a short summary of what you changed and anything left to do.",
   ]
     .filter((l) => l !== null)
@@ -75,6 +77,8 @@ export function claudeArgs(offer, runner) {
     JSON.stringify({ disableAllHooks: true }),
     "--append-system-prompt",
     SHELL_RULES,
+    // A delegated run is shaped by its agent: the server sends the CLI's own definition (instructions, tools, effort) and its name.
+    ...(offer.agent ? ["--agents", JSON.stringify(offer.agent.definitions), "--agent", offer.agent.name] : []),
   ];
 }
 

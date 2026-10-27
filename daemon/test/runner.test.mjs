@@ -64,6 +64,17 @@ test("the run is headless and fenced: restricted, no MCP, no hooks, prompts refu
   for (const r of ["Bash(curl:*)", "Bash(git push:*)"]) assert.ok(!allowed.includes(r), r);
 });
 
+test("a delegated run uses its agent's definition, and is told to check done and ask", () => {
+  const agent = { slug: "remy", name: "wh-remy", definitions: { "wh-remy": { description: "Reviewer", prompt: "Review it.", model: "opus", effort: "high" } } };
+  const a = claudeArgs({ ...offer, agent }, DEFAULT_RUNNER);
+  assert.equal(a[a.indexOf("--agent") + 1], "wh-remy");
+  assert.deepEqual(JSON.parse(a[a.indexOf("--agents") + 1]), agent.definitions);
+  assert.equal(a[a.indexOf("--model") + 1], "sonnet", "the model the server chose wins");
+  assert.match(buildPrompt({ ...offer, agent }), /QUESTION:/);
+  assert.equal(claudeArgs(offer, DEFAULT_RUNNER).includes("--agent"), false, "a run without an agent is as before");
+  assert.doesNotMatch(buildPrompt(offer), /QUESTION:/);
+});
+
 test("stream-json becomes short progress events", () => {
   assert.deepEqual(eventsFrom('{"type":"system","subtype":"init","model":"m","session_id":"s"}'), [{ type: "started", data: { model: "m", sessionId: "s" } }]);
   assert.deepEqual(eventsFrom("not json"), []);
