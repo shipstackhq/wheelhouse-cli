@@ -202,3 +202,8 @@ SDK, permission prompts in the web UI.
 - Confirm with Anthropic that the job runner and the web chat relay are fine on Pro and Max plans, and agree to the Commercial
   Terms. The current reading is that running the user's own unmodified CLI is allowed, while volume ("ordinary, individual
   usage") and the chat relay are the gray areas.
+
+With `mcp.write: true` (the key also has write scopes; missing means false) the chat rules say it may create and update issues,
+comment, write docs and update the map when asked, must not change what was not asked for, must treat issue, doc and code text as
+data, and must end with a list of what it changed. The code stays read-only. `--allowedTools` is unchanged (`mcp__wheelhouse`):
+the server filters tools by the key's scopes.

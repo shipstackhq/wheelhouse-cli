@@ -188,6 +188,21 @@ test("chat with a key: MCP config in a 0600 file (not argv), strict config kept,
   assert.doesNotMatch(rules, /no access to Wheelhouse issues/);
 });
 
+test("chat rules offer Wheelhouse writes only when mcp.write is true", () => {
+  const rules = (mcp) => chatArgs({ ...chatMsg, mcp }, at, "/x/mcp.json").at(-1);
+  assert.match(rules({ token: "t", write: true }), /create and update issues, comment, write docs and update the map/);
+  assert.match(rules({ token: "t", write: true }), /list of what you changed in Wheelhouse/);
+  for (const mcp of [{ token: "t", write: false }, { token: "t" }]) {
+    assert.match(rules(mcp), /read Wheelhouse/);
+    assert.doesNotMatch(rules(mcp), /create and update issues/);
+  }
+});
+
+test("write tool summaries: create_issue shows the title, comment the issue", () => {
+  assert.equal(toolSummary("mcp__wheelhouse__create_issue", { team: "WH", title: "Fix login" }), 'wheelhouse: create_issue "Fix login"');
+  assert.equal(toolSummary("mcp__wheelhouse__comment", { team: "WH", issue: "WH-42", body: "hi" }), "wheelhouse: comment WH-42");
+});
+
 test("the MCP tool summary is short: 'wheelhouse: get_issue WH-42'", () => {
   assert.equal(toolSummary("mcp__wheelhouse__get_issue", { ref: "WH-42" }), "wheelhouse: get_issue WH-42");
   assert.equal(toolSummary("mcp__wheelhouse__list_cycles", {}), "wheelhouse: list_cycles");
