@@ -64,6 +64,22 @@ test("the run is headless and fenced: restricted, no MCP, no hooks, prompts refu
   for (const r of ["Bash(curl:*)", "Bash(git push:*)"]) assert.ok(!allowed.includes(r), r);
 });
 
+test("a run with a key reads Wheelhouse through a private MCP config file that is gone afterwards", async () => {
+  assert.equal(claudeArgs(offer, DEFAULT_RUNNER).includes("--mcp-config"), false, "no key, no MCP");
+  assert.doesNotMatch(buildPrompt(offer), /wheelhouse tools/);
+  const keyed = { ...offer, issue: { ...offer.issue, team: { key: "WH" } }, mcp: { token: "wh_secret" } };
+  assert.match(buildPrompt(keyed), /wheelhouse tools; pass team "WH".*read-only/);
+  const cwd = fs.mkdtempSync(path.join(tmp, "mcp-"));
+  let file;
+  await runClaude({ offer: keyed, cwd, runner: DEFAULT_RUNNER, server: "http://wh.test/", claudePath: fake, signal: new AbortController().signal });
+  const a = JSON.parse(fs.readFileSync(path.join(cwd, "args.json"), "utf8"));
+  file = a[a.indexOf("--mcp-config") + 1];
+  assert.ok(a[a.indexOf("--allowedTools") + 1].split(",").includes("mcp__wheelhouse"));
+  assert.equal(a.join(" ").includes("wh_secret"), false, "the key is never in argv");
+  assert.equal(file.startsWith(cwd), false, "outside the worktree");
+  assert.equal(fs.existsSync(file), false, "removed when the run ends");
+});
+
 test("a delegated run uses its agent's definition, and is told to check done and ask", () => {
   const agent = { slug: "remy", name: "wh-remy", definitions: { "wh-remy": { description: "Reviewer", prompt: "Review it.", model: "opus", effort: "high" } } };
   const a = claudeArgs({ ...offer, agent }, DEFAULT_RUNNER);

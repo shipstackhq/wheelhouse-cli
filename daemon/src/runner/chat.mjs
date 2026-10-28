@@ -2,10 +2,7 @@
 // (plus moving its own detached checkout to another branch), no other shell, no hooks, no MCP except Wheelhouse's own read-only server when the message carries a key, over a detached worktree of the repository. The prompt is the person's message as typed; what the assistant is and
 // may do goes in the system prompt. stream-json comes back as `delta` (answer text), `tool` (what it looked at) and `result`.
 
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { runCli, toolSummary } from "./claude.mjs";
+import { runCli, toolSummary, withMcpConfig } from "./claude.mjs";
 
 /** A chat answer that takes longer than this is stopped. */
 export const CHAT_TIMEOUT_MS = 10 * 60_000;
@@ -113,18 +110,8 @@ export function chatParser() {
  * whole answer. With `message.mcp.token` the Wheelhouse MCP config goes in a 0600 file in its own temp directory (outside `cwd`, so the
  * assistant cannot read it, and not in argv, where `ps` would show the key), removed when the answer ends.
  */
-export async function runChat({ message, checkout, cwd, server, claudePath, signal, onEvent, onSpawn, timeoutMs = CHAT_TIMEOUT_MS }) {
-  const token = message.mcp?.token;
-  const dir = token ? fs.mkdtempSync(path.join(os.tmpdir(), "wh-mcp-")) : null;
-  try {
-    let mcpConfig;
-    if (dir) {
-      mcpConfig = path.join(dir, "mcp.json");
-      const config = { mcpServers: { wheelhouse: { type: "http", url: `${server.replace(/\/+$/, "")}/mcp`, headers: { Authorization: `Bearer ${token}` } } } };
-      fs.writeFileSync(mcpConfig, JSON.stringify(config), { mode: 0o600 });
-    }
-    return await runCli({ args: chatArgs(message, checkout, mcpConfig), cwd, claudePath, signal, parse: chatParser(), onEvent, onSpawn, timeoutMs });
-  } finally {
-    if (dir) fs.rmSync(dir, { recursive: true, force: true });
-  }
+export function runChat({ message, checkout, cwd, server, claudePath, signal, onEvent, onSpawn, timeoutMs = CHAT_TIMEOUT_MS }) {
+  return withMcpConfig(message.mcp?.token, server, (mcpConfig) =>
+    runCli({ args: chatArgs(message, checkout, mcpConfig), cwd, claudePath, signal, parse: chatParser(), onEvent, onSpawn, timeoutMs }),
+  );
 }
