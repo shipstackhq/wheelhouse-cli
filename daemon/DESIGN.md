@@ -186,6 +186,11 @@ Agents writing to the board belong to the MCP redesign, which comes after the UI
 `boardAccess` field that is always `none`, and the runner has the hook where it would add the Wheelhouse MCP server and a
 job-scoped key. Status changes on the issue come only from Wheelhouse, driven by job state.
 
+Chat can read Wheelhouse: a `chat.message` may carry `mcp: { token }`, a read-only key valid for that answer. The daemon writes an
+MCP config (HTTP server `wheelhouse` at `<server>/mcp`, bearer token) to a 0600 file in its own temp directory outside the worktree
+(argv would show the key in `ps`, and the worktree is readable by the assistant), passes it with `--mcp-config` under
+`--strict-mcp-config`, allows `mcp__wheelhouse`, and deletes the file when the answer ends. No key: no MCP, as before.
+
 ## Out of scope for the MVP
 
 The chat agent (phase 2: one long `claude -p --resume <session> --model <current>` per message, with daemon tools only and no
@@ -197,3 +202,8 @@ SDK, permission prompts in the web UI.
 - Confirm with Anthropic that the job runner and the web chat relay are fine on Pro and Max plans, and agree to the Commercial
   Terms. The current reading is that running the user's own unmodified CLI is allowed, while volume ("ordinary, individual
   usage") and the chat relay are the gray areas.
+
+With `mcp.write: true` (the key also has write scopes; missing means false) the chat rules say it may create and update issues,
+comment, write docs and update the map when asked, must not change what was not asked for, must treat issue, doc and code text as
+data, and must end with a list of what it changed. The code stays read-only. `--allowedTools` is unchanged (`mcp__wheelhouse`):
+the server filters tools by the key's scopes.

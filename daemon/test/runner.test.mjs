@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { DEFAULT_RUNNER } from "../src/config.mjs";
 import { chatArgs, chatParser, runChat } from "../src/runner/chat.mjs";
-import { buildPrompt, claudeArgs, eventsFrom, runClaude } from "../src/runner/claude.mjs";
+import { buildPrompt, claudeArgs, eventsFrom, runClaude, toolSummary } from "../src/runner/claude.mjs";
 
 // A stand-in for the claude CLI: prints stream-json like `claude -p --output-format stream-json`, records its arguments, and with
 // FAKE_CLAUDE_HANG stays alive until it is killed.
@@ -62,6 +62,17 @@ test("the run is headless and fenced: restricted, no MCP, no hooks, prompts refu
   const allowed = a[a.indexOf("--allowedTools") + 1].split(",");
   for (const r of ["Bash(git commit:*)", "Bash(cat:*)", "Bash(pnpm test:*)"]) assert.ok(allowed.includes(r), r);
   for (const r of ["Bash(curl:*)", "Bash(git push:*)"]) assert.ok(!allowed.includes(r), r);
+});
+
+test("a delegated run uses its agent's definition, and is told to check done and ask", () => {
+  const agent = { slug: "remy", name: "wh-remy", definitions: { "wh-remy": { description: "Reviewer", prompt: "Review it.", model: "opus", effort: "high" } } };
+  const a = claudeArgs({ ...offer, agent }, DEFAULT_RUNNER);
+  assert.equal(a[a.indexOf("--agent") + 1], "wh-remy");
+  assert.deepEqual(JSON.parse(a[a.indexOf("--agents") + 1]), agent.definitions);
+  assert.equal(a[a.indexOf("--model") + 1], "sonnet", "the model the server chose wins");
+  assert.match(buildPrompt({ ...offer, agent }), /QUESTION:/);
+  assert.equal(claudeArgs(offer, DEFAULT_RUNNER).includes("--agent"), false, "a run without an agent is as before");
+  assert.doesNotMatch(buildPrompt(offer), /QUESTION:/);
 });
 
 test("stream-json becomes short progress events", () => {
@@ -170,4 +181,71 @@ else out({ type: "result", is_error: false, session_id: "s1", total_cost_usd: 0.
   } finally {
     delete process.env.FAKE_CLAUDE_HANG;
   }
+});
+
+test("chat with a key: MCP config in a 0600 file (not argv), strict config kept, mcp__wheelhouse allowed, rules switch; without one, none of it", () => {
+  const without = chatArgs(chatMsg, at);
+  assert.ok(!without.includes("--mcp-config"));
+  assert.ok(without.includes("--strict-mcp-config"));
+  assert.ok(!without[without.indexOf("--allowedTools") + 1].includes("mcp__wheelhouse"));
+  assert.match(without[without.indexOf("--append-system-prompt") + 1], /no access to Wheelhouse issues/);
+
+  const withKey = chatArgs(chatMsg, at, "/x/mcp.json");
+  assert.equal(withKey[withKey.indexOf("--mcp-config") + 1], "/x/mcp.json");
+  assert.ok(withKey.includes("--strict-mcp-config"));
+  assert.ok(withKey[withKey.indexOf("--allowedTools") + 1].split(",").includes("mcp__wheelhouse"));
+  const rules = withKey[withKey.indexOf("--append-system-prompt") + 1];
+  assert.match(rules, /read Wheelhouse/);
+  assert.doesNotMatch(rules, /no access to Wheelhouse issues/);
+});
+
+test("chat rules offer Wheelhouse writes only when mcp.write is true", () => {
+  const rules = (mcp) => chatArgs({ ...chatMsg, mcp }, at, "/x/mcp.json").at(-1);
+  assert.match(rules({ token: "t", write: true }), /create and update issues, comment, write docs and update the map/);
+  assert.match(rules({ token: "t", write: true }), /list of what you changed in Wheelhouse/);
+  for (const mcp of [{ token: "t", write: false }, { token: "t" }]) {
+    assert.match(rules(mcp), /read Wheelhouse/);
+    assert.doesNotMatch(rules(mcp), /create and update issues/);
+  }
+});
+
+test("write tool summaries: create_issue shows the title, comment the issue", () => {
+  assert.equal(toolSummary("mcp__wheelhouse__create_issue", { team: "WH", title: "Fix login" }), 'wheelhouse: create_issue "Fix login"');
+  assert.equal(toolSummary("mcp__wheelhouse__comment", { team: "WH", issue: "WH-42", body: "hi" }), "wheelhouse: comment WH-42");
+});
+
+test("the MCP tool summary is short: 'wheelhouse: get_issue WH-42'", () => {
+  assert.equal(toolSummary("mcp__wheelhouse__get_issue", { ref: "WH-42" }), "wheelhouse: get_issue WH-42");
+  assert.equal(toolSummary("mcp__wheelhouse__list_cycles", {}), "wheelhouse: list_cycles");
+});
+
+test("a keyed chat run writes the config 0600 outside cwd, keeps the token out of argv and events, and deletes it after", async () => {
+  const cwd = fs.mkdtempSync(path.join(tmp, "chat-"));
+  const rec = path.join(tmp, "mcp-seen.json");
+  const fakeMcp = path.join(tmp, "claude-mcp");
+  fs.writeFileSync(
+    fakeMcp,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const a = process.argv.slice(2);
+const f = a[a.indexOf("--mcp-config") + 1];
+fs.writeFileSync(${JSON.stringify(rec)}, JSON.stringify({ argv: a, f, mode: fs.statSync(f).mode & 0o777, config: fs.readFileSync(f, "utf8") }));
+const out = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+out({ type: "assistant", message: { content: [{ type: "tool_use", name: "mcp__wheelhouse__get_issue", input: { ref: "WH-42" } }] } });
+out({ type: "result", is_error: false, session_id: "s1", result: "ok" });
+`,
+    { mode: 0o755 },
+  );
+  const events = [];
+  const msg = { ...chatMsg, mcp: { token: "wh_secret123" } };
+  const r = await runChat({ message: msg, checkout: at, cwd, server: "https://wh.example/", claudePath: fakeMcp, onEvent: (e) => events.push(e) });
+  assert.equal(r.ok, true);
+  const seen = JSON.parse(fs.readFileSync(rec, "utf8"));
+  assert.equal(seen.mode, 0o600);
+  assert.ok(!seen.f.startsWith(cwd));
+  assert.deepEqual(JSON.parse(seen.config).mcpServers.wheelhouse, { type: "http", url: "https://wh.example/mcp", headers: { Authorization: "Bearer wh_secret123" } });
+  assert.ok(!JSON.stringify(seen.argv).includes("wh_secret123"));
+  assert.ok(!JSON.stringify(events).includes("wh_secret123"));
+  assert.equal(events.find((e) => e.type === "tool").data.summary, "wheelhouse: get_issue WH-42");
+  assert.ok(!fs.existsSync(seen.f), "config removed after the answer");
 });
