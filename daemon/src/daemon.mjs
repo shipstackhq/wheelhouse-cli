@@ -99,7 +99,7 @@ export async function runDaemon({ signal } = {}) {
     config,
     log,
     runJob: ({ offer, cwd, signal: s, onEvent, onSpawn }) => runClaude({ offer, cwd, runner: config.runner, claudePath, signal: s, onEvent, onSpawn }),
-    runChat: ({ message, checkout, cwd, signal: s, onEvent }) => runChat({ message, checkout, cwd, claudePath, signal: s, onEvent }),
+    runChat: ({ message, checkout, cwd, signal: s, onEvent }) => runChat({ message, checkout, cwd, server: config.server, claudePath, signal: s, onEvent }),
   });
   supervisor.onSettings = (s) => updateConfig({ poolSize: s.poolSize, chatModel: s.chatModel }, p);
 
