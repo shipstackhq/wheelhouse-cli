@@ -191,6 +191,7 @@ export class Supervisor {
     this.records.write({ id: m.jobId, repositoryId: m.repository.id, branch: m.branch, startedAt: new Date(started).toISOString(), pid: null });
     let cwd = null;
     let outcome;
+    const review = m.mode === "review" || m.push === false;
     const superseded = () => this.jobs.get(m.jobId)?.superseded === true;
     const stopped = () => (superseded() ? SUPERSEDED_REASON : this.stopReason());
     try {
@@ -225,15 +226,19 @@ export class Supervisor {
         outcome = { state: "canceled", pushed: false, costUsd: r.result?.costUsd ?? null, error: SUPERSEDED_REASON };
         throw new Superseded();
       }
-      phase("pushing", m.branch);
-      await this.workspace.commitLeftovers(cwd, `${m.issue.ref}: work in progress from the agent run`);
-      const sum = await this.workspace.summary(cwd, wt.base);
+      // A review (WH-122) only reads: nothing is committed or pushed, and what it says is the result.
+      let sum = { commit: null, diffStats: {}, ahead: 0 };
       let pushed = false;
-      if (sum.ahead > 0) {
-        await this.workspace.push(cwd, m.branch);
-        pushed = true;
+      if (!review) {
+        phase("pushing", m.branch);
+        await this.workspace.commitLeftovers(cwd, `${m.issue.ref}: work in progress from the agent run`);
+        sum = await this.workspace.summary(cwd, wt.base);
+        if (sum.ahead > 0) {
+          await this.workspace.push(cwd, m.branch);
+          pushed = true;
+        }
       }
-      const result = { commit: sum.commit, pushed, diffStats: sum.diffStats, costUsd: r.result?.costUsd ?? null, durationMs: this.now() - started };
+      const result = { commit: sum.commit, pushed, diffStats: sum.diffStats, costUsd: r.result?.costUsd ?? null, durationMs: this.now() - started, ...(r.result?.learnings?.length ? { learnings: r.result.learnings } : {}) };
       if (r.stopped === "canceled" || signal.aborted) outcome = { state: "canceled", ...result, error: stopped() };
       else if (r.stopped === "timeout") outcome = { state: "failed", ...result, error: `The agent ran past the ${this.config.runner.timeoutMinutes}-minute limit` };
       else if (!r.ok) outcome = { state: "failed", ...result, error: r.error ?? r.result?.text ?? (r.stderr || `claude exited with ${r.exitCode}`) };
@@ -249,7 +254,7 @@ export class Supervisor {
     // A finish that could not get through (no connection) is kept with the job's record and sent again once Wheelhouse is reachable.
     if (retry) this.records.update(m.jobId, { pendingFinish: report });
     else this.records.remove(m.jobId);
-    if (cwd && outcome.state === "succeeded" && outcome.pushed) await this.workspace.removeWorktree(m.repository.id, m.jobId).catch(() => {});
+    if (cwd && outcome.state === "succeeded" && (outcome.pushed || review)) await this.workspace.removeWorktree(m.repository.id, m.jobId).catch(() => {});
     this.log(`job ${m.jobId}: ${outcome.state}${outcome.error ? ` (${outcome.error})` : ""}`);
     return outcome;
   }
