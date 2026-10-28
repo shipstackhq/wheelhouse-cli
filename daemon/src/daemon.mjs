@@ -103,7 +103,7 @@ export async function runDaemon({ signal } = {}) {
   });
   supervisor.onSettings = (s) => updateConfig({ poolSize: s.poolSize, chatModel: s.chatModel }, p);
 
-  log(`wheelhouse-daemon ${VERSION}: ${config.name ?? "this machine"} → ${config.server} (${config.workspace?.name ?? "workspace"})`);
+  log(`wheelhouse-daemon ${VERSION}: ${config.name ?? "this machine"} → ${config.server}`);
   log(`claude: ${claudePath}`);
   const stop = new AbortController();
   signal?.addEventListener("abort", () => stop.abort(), { once: true });

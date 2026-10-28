@@ -45,7 +45,7 @@ Built for production from the start.
    Windows, the Secret Service on Linux; a `0600` file only as a last resort).
 2. The daemon calls `POST /api/daemon/pair/start` with its public key, machine name and OS. The server returns a
    `device_code`, a short `user_code` and a verification URL, and the daemon prints the code and the URL.
-3. The signed-in user opens the URL, sees the code, the machine name and the OS, picks the workspace, can rename the device,
+3. The signed-in user opens the URL, sees the code, the machine name and the OS, can rename the device,
    and approves.
 4. The daemon polls `POST /api/daemon/pair/poll` with the `device_code` and receives its `device_id` and the server's
    signing public key, which it pins.
@@ -63,11 +63,11 @@ compromised session or proxy on the path cannot make the machine run code.
 The daemon then stops taking jobs, finishes or cancels the current ones (user setting), and reports that it is unpaired.
 `wheelhouse daemon unpair` does the same from the machine.
 
-**Scope.** A device belongs to one user and one workspace, and can only run jobs on projects in that workspace.
+**Scope.** A device belongs to one user, not a workspace, and runs jobs from every workspace the user is a member of.
 
 ## Data model (first cut, refined while testing)
 
-`device`: id, workspace, owner (user), name, os, public key, status (`online` / `offline` / `revoked`), last seen,
+`device`: id, owner (user), name, os, public key, status (`online` / `offline` / `revoked`), last seen,
 capabilities (JSON, from the latest report), pool size, chat model (unused until phase 2), created.
 
 `job`: id, device, issue, repository, model, state, branch, worktree name, error, started, finished, created by.

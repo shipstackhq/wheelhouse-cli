@@ -105,7 +105,6 @@ export const DEFAULT_CONFIG = {
   server: null,
   deviceId: null,
   serverPublicKey: null,
-  workspace: null,
   name: null,
   // Set from the server's settings messages.
   poolSize: 3,

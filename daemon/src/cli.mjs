@@ -73,8 +73,8 @@ async function pair(o) {
     if (r.status === "expired") break;
     if (r.status === "approved") {
       storeKey(keystore, p.home, exportPrivateKey(keys.privateKey));
-      saveConfig({ ...before, server, keystore, deviceId: r.deviceId, serverPublicKey: r.serverPublicKey, workspace: r.workspace, name: r.device.name, poolSize: r.device.poolSize, lastEventId: null }, p);
-      console.log(`Paired as "${r.device.name}" in ${r.workspace.name}. The key is in the ${keystore === "keychain" ? "login Keychain" : `file ${p.home}/device-key`}.`);
+      saveConfig({ ...before, server, keystore, deviceId: r.deviceId, serverPublicKey: r.serverPublicKey, name: r.device.name, poolSize: r.device.poolSize, lastEventId: null }, p);
+      console.log(`Paired as "${r.device.name}". The key is in the ${keystore === "keychain" ? "login Keychain" : `file ${p.home}/device-key`}.`);
       console.log(`Start it now with \`wheelhouse-daemon run\`, or install it as a background service:\n  sh daemon/platform/macos/install.sh --entry "$(pwd)/daemon/src/main.mjs"`);
       return;
     }
@@ -91,7 +91,6 @@ function status() {
     [
       `wheelhouse-daemon ${VERSION}`,
       `server:     ${c.server}`,
-      `workspace:  ${c.workspace?.name ?? "?"}`,
       `device:     ${c.name} (${c.deviceId})`,
       `runs:       up to ${c.poolSize} at once`,
       `key:        ${key ? `in the ${c.keystore}` : `MISSING from the ${c.keystore}`}`,
