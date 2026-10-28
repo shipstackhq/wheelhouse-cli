@@ -64,6 +64,22 @@ test("the run is headless and fenced: restricted, no MCP, no hooks, prompts refu
   for (const r of ["Bash(curl:*)", "Bash(git push:*)"]) assert.ok(!allowed.includes(r), r);
 });
 
+test("a run with a key reads Wheelhouse through a private MCP config file that is gone afterwards", async () => {
+  assert.equal(claudeArgs(offer, DEFAULT_RUNNER).includes("--mcp-config"), false, "no key, no MCP");
+  assert.doesNotMatch(buildPrompt(offer), /wheelhouse tools/);
+  const keyed = { ...offer, issue: { ...offer.issue, team: { key: "WH" } }, mcp: { token: "wh_secret" } };
+  assert.match(buildPrompt(keyed), /wheelhouse tools; pass team "WH".*read-only/);
+  const cwd = fs.mkdtempSync(path.join(tmp, "mcp-"));
+  let file;
+  await runClaude({ offer: keyed, cwd, runner: DEFAULT_RUNNER, server: "http://wh.test/", claudePath: fake, signal: new AbortController().signal });
+  const a = JSON.parse(fs.readFileSync(path.join(cwd, "args.json"), "utf8"));
+  file = a[a.indexOf("--mcp-config") + 1];
+  assert.ok(a[a.indexOf("--allowedTools") + 1].split(",").includes("mcp__wheelhouse"));
+  assert.equal(a.join(" ").includes("wh_secret"), false, "the key is never in argv");
+  assert.equal(file.startsWith(cwd), false, "outside the worktree");
+  assert.equal(fs.existsSync(file), false, "removed when the run ends");
+});
+
 test("a delegated run uses its agent's definition, and is told to check done and ask", () => {
   const agent = { slug: "remy", name: "wh-remy", definitions: { "wh-remy": { description: "Reviewer", prompt: "Review it.", model: "opus", effort: "high" } } };
   const a = claudeArgs({ ...offer, agent }, DEFAULT_RUNNER);
@@ -73,6 +89,42 @@ test("a delegated run uses its agent's definition, and is told to check done and
   assert.match(buildPrompt({ ...offer, agent }), /QUESTION:/);
   assert.equal(claudeArgs(offer, DEFAULT_RUNNER).includes("--agent"), false, "a run without an agent is as before");
   assert.doesNotMatch(buildPrompt(offer), /QUESTION:/);
+});
+
+test("an answered question is handed to the continuing run", () => {
+  const p = buildPrompt({ ...offer, previous: { jobId: "j0", state: "succeeded", summary: "QUESTION: which database?", answer: "Postgres, please" } });
+  assert.match(p, /stopped to ask a question, and someone has answered/);
+  assert.match(p, /Your question:\n> which database\?/);
+  assert.match(p, /The answer:\n> Postgres, please/);
+  assert.doesNotMatch(p, /pushed its work/);
+});
+
+test("the offer's effort is passed to Claude, and left out when there is none", () => {
+  const a = claudeArgs({ ...offer, effort: "high" }, DEFAULT_RUNNER);
+  assert.equal(a[a.indexOf("--effort") + 1], "high");
+  assert.equal(claudeArgs(offer, DEFAULT_RUNNER).includes("--effort"), false);
+});
+
+test("a review reads the pull request, may not edit, and is told to give a verdict", () => {
+  const review = { ...offer, mode: "review", push: false, review: { pullRequest: { number: 7, url: "https://github.com/acme/app/pull/7", headBranch: "wh/feature", headSha: "abc1234" } } };
+  const p = buildPrompt(review);
+  assert.match(p, /reviewing pull request #7/);
+  assert.match(p, /Do not change any file, do not commit and do not push/);
+  assert.match(p, /VERDICT: looks good/);
+  assert.doesNotMatch(p, /Commit your work/);
+  const a = claudeArgs(review, DEFAULT_RUNNER);
+  assert.match(a[a.indexOf("--disallowedTools") + 1], /Edit,Write,NotebookEdit/);
+  assert.doesNotMatch(claudeArgs(offer, DEFAULT_RUNNER)[claudeArgs(offer, DEFAULT_RUNNER).indexOf("--disallowedTools") + 1], /NotebookEdit/);
+});
+
+test("a delegated run is asked for learnings; LEARNING lines leave the summary and become a list", () => {
+  const agent = { slug: "remy", name: "wh-remy", definitions: {} };
+  assert.match(buildPrompt({ ...offer, agent }), /start with "LEARNING: "/);
+  assert.doesNotMatch(buildPrompt(offer), /LEARNING/);
+  const [e] = eventsFrom(JSON.stringify({ type: "result", subtype: "success", result: "Changed a.ts\nLEARNING: Tests live next to source\nLEARNING: Use pnpm" }));
+  assert.equal(e.data.text, "Changed a.ts");
+  assert.deepEqual(e.data.learnings, ["Tests live next to source", "Use pnpm"]);
+  assert.equal(eventsFrom(JSON.stringify({ type: "result", result: "Plain" }))[0].data.learnings, undefined);
 });
 
 test("stream-json becomes short progress events", () => {

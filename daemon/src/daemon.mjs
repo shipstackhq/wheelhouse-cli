@@ -98,12 +98,12 @@ export async function runDaemon({ signal } = {}) {
     records,
     config,
     log,
-    runJob: ({ offer, cwd, signal: s, onEvent, onSpawn }) => runClaude({ offer, cwd, runner: config.runner, claudePath, signal: s, onEvent, onSpawn }),
+    runJob: ({ offer, cwd, signal: s, onEvent, onSpawn }) => runClaude({ offer, cwd, runner: config.runner, server: config.server, claudePath, signal: s, onEvent, onSpawn }),
     runChat: ({ message, checkout, cwd, signal: s, onEvent }) => runChat({ message, checkout, cwd, server: config.server, claudePath, signal: s, onEvent }),
   });
   supervisor.onSettings = (s) => updateConfig({ poolSize: s.poolSize, chatModel: s.chatModel }, p);
 
-  log(`wheelhouse-daemon ${VERSION}: ${config.name ?? "this machine"} → ${config.server} (${config.workspace?.name ?? "workspace"})`);
+  log(`wheelhouse-daemon ${VERSION}: ${config.name ?? "this machine"} → ${config.server}`);
   log(`claude: ${claudePath}`);
   const stop = new AbortController();
   signal?.addEventListener("abort", () => stop.abort(), { once: true });

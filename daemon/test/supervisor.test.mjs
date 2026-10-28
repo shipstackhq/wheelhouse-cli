@@ -43,12 +43,13 @@ const chatMessage = (o = {}) => ({
 /** A fake line to Wheelhouse that records every POST; a fake workspace; a runner that waits until released or aborted. */
 function setup({ poolSize = 2 } = {}) {
   const posts = [];
+  const calls = [];
   const conn = { post: async (path, body) => (posts.push({ path, body }), {}) };
   const releases = new Map();
   const runJob = ({ offer: m, signal, onEvent }) =>
     new Promise((resolve) => {
       onEvent({ type: "started", data: {} });
-      releases.set(m.jobId, () => resolve({ ok: true, exitCode: 0, result: { costUsd: 0.1, text: "done" } }));
+      releases.set(m.jobId, (extra = {}) => resolve({ ok: true, exitCode: 0, result: { costUsd: 0.1, text: "done", ...extra } }));
       signal.addEventListener("abort", () => resolve({ ok: false, stopped: "canceled", exitCode: null, result: null }));
     });
   const runChat = ({ message: m, signal, onEvent }) =>
@@ -63,9 +64,9 @@ function setup({ poolSize = 2 } = {}) {
     chatWorktree: async (_r, threadId) => ({ dir: `/chat/${threadId}`, commit: "abc1234", branches: ["origin/main"] }),
     ensureClone: async () => "/repo",
     createWorktree: async (_r, jobId) => ({ dir: `/wt/${jobId}`, base: "origin/main" }),
-    commitLeftovers: async () => false,
+    commitLeftovers: async () => (calls.push("commit"), false),
     summary: async () => ({ ahead: 1, commit: "abc1234", diffStats: { files: 1, insertions: 2, deletions: 0 } }),
-    push: async () => {},
+    push: async () => void calls.push("push"),
     removeWorktree: async () => {},
   };
   const records = { write() {}, update() {}, remove() {} };
@@ -82,7 +83,7 @@ function setup({ poolSize = 2 } = {}) {
     config: { runner: { timeoutMinutes: 45 }, repositories: {} },
     log: (m) => logs.push(m),
   });
-  return { sup, posts, releases, logs };
+  return { sup, posts, releases, logs, calls };
 }
 
 let s;
@@ -102,6 +103,25 @@ test("a verified offer is accepted, run, and finished with what the run reported
   assert.equal(finish.body.pushed, true);
   assert.ok(s.posts.some((p) => p.path.endsWith("/events") && p.body.events.some((e) => e.type === "started")));
   assert.deepEqual(s.sup.running(), []);
+});
+
+test("a run's learnings go with its finish", async () => {
+  const m = offer();
+  await s.sup.handle(sign(m));
+  s.releases.get(m.jobId)({ learnings: ["This team keeps tests next to source"] });
+  await s.sup.jobs.get(m.jobId)?.done;
+  assert.deepEqual(s.posts.find((p) => p.path.endsWith("/finish")).body.learnings, ["This team keeps tests next to source"]);
+});
+
+test("a review commits nothing and pushes nothing, and still finishes with what it said", async () => {
+  const m = offer({ mode: "review", push: false, startFrom: "wh/feature", review: { pullRequest: { number: 7, url: "u", headBranch: "wh/feature", headSha: "abc" } } });
+  await s.sup.handle(sign(m));
+  s.releases.get(m.jobId)();
+  await s.sup.jobs.get(m.jobId)?.done;
+  const finish = s.posts.find((p) => p.path.endsWith("/finish"));
+  assert.equal(finish.body.state, "succeeded");
+  assert.equal(finish.body.pushed, false);
+  assert.deepEqual(s.calls, [], "no commit and no push");
 });
 
 test("unverifiable messages are dropped without a word to the server", async () => {

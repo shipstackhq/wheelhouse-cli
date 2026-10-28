@@ -170,6 +170,22 @@ export class Workspace {
     return true;
   }
 
+  /**
+   * A continuation brings its base in first, so the agent works on what has landed since (the agent itself may not merge or fetch).
+   * Answers "current" (nothing new), "merged", or the conflicting paths, left mid-merge with markers for the agent to resolve and commit.
+   */
+  async syncBase(dir, base) {
+    if (await git(dir, "merge-base", "--is-ancestor", base, "HEAD").then(() => true, () => false)) return "current";
+    const known = await git(dir, "config", "user.email").catch(() => "");
+    const who = known ? [] : ["-c", "user.name=Wheelhouse agent", "-c", "user.email=agent@wheelhouse.invalid"];
+    try {
+      await git(dir, ...who, "merge", "--no-edit", base);
+      return "merged";
+    } catch {
+      return (await git(dir, "diff", "--name-only", "--diff-filter=U").catch(() => "")).split("\n").filter(Boolean);
+    }
+  }
+
   async summary(dir, base) {
     const ahead = Number(await git(dir, "rev-list", "--count", `${base}..HEAD`)) || 0;
     const commit = await git(dir, "rev-parse", "HEAD");
