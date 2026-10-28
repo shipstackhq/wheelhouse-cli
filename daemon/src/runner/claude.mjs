@@ -59,6 +59,8 @@ export function buildPrompt(offer) {
     offer.previous
       ? `You are in a git worktree of ${repository.fullName ?? repository.name}, on the branch ${branch}, which already holds the earlier attempt's commits. Its pull request (if any) targets ${offer.baseBranch ?? repository.defaultBranch}.`
       : `You are in a fresh git worktree of ${repository.fullName ?? repository.name}, on the branch ${branch}, made from ${offer.baseBranch ?? repository.defaultBranch}.`,
+    offer.baseSync === "merged" ? `Wheelhouse merged the latest ${offer.baseBranch ?? repository.defaultBranch} into this branch before you started, so work that landed since is here.` : null,
+    Array.isArray(offer.baseSync) ? `The latest ${offer.baseBranch ?? repository.defaultBranch} conflicts with this branch in ${offer.baseSync.join(", ") || "some files"}. Wheelhouse started the merge and left the conflict markers: resolve them, commit the merge, then carry on.` : null,
     repository.pathLimit ? `This team's work is limited to ${repository.pathLimit} in this repository.` : null,
     "Make the change the issue asks for. Then check it, in proportion to what you changed: for a Markdown or other docs-only change run no tests at all; for code run the tests, lint and typecheck that cover the files you touched (one package or one test file, not the whole repository's suite), and fix what you broke.",
     "The worktree starts without installed dependencies. Install them only when a check you actually need requires it, never to look around, and prefer the frozen-lockfile form (for example `pnpm install --frozen-lockfile`).",

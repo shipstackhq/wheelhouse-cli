@@ -202,6 +202,12 @@ export class Supervisor {
       phase("worktree", m.previous ? `${m.branch}, continuing from its last push` : `${m.branch} from ${startFrom ?? m.repository.defaultBranch}`);
       const wt = await this.workspace.createWorktree(m.repository, m.jobId, m.branch, startFrom);
       cwd = wt.dir;
+      if (m.previous && !review) {
+        const base = `origin/${m.baseBranch ?? m.repository.defaultBranch}`;
+        const sync = await this.workspace.syncBase(cwd, base);
+        phase("base", Array.isArray(sync) ? `conflicts with ${base}` : `${sync} with ${base}`);
+        m = { ...m, baseSync: sync };
+      }
       const setup = this.config.repositories?.[m.repository.id]?.setup;
       if (setup) {
         phase("setup", setup);

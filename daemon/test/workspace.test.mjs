@@ -98,6 +98,33 @@ test("a continuation starts from the job's own pushed branch and counts only wha
   await ws.removeWorktree(REPO, second);
 });
 
+test("a continuation brings in what landed on its base; a conflict is left for the agent", async () => {
+  const seed = path.join(tmp, "seed");
+  g(seed, "checkout", "-q", "main");
+  await ws.ensureClone(repository());
+  const job = "88888888-8888-8888-8888-888888888888";
+  const { dir } = await ws.createWorktree(repository(), job, "wh/WH-4-sync", "main");
+  assert.equal(await ws.syncBase(dir, "origin/main"), "current");
+
+  fs.writeFileSync(path.join(seed, "landed.txt"), "from main\n");
+  g(seed, "add", ".");
+  g(seed, "commit", "-m", "landed");
+  g(seed, "push", origin, "main");
+  await ws.ensureClone(repository());
+  assert.equal(await ws.syncBase(dir, "origin/main"), "merged");
+  assert.equal(fs.existsSync(path.join(dir, "landed.txt")), true);
+
+  fs.writeFileSync(path.join(dir, "landed.txt"), "from the branch\n");
+  await ws.commitLeftovers(dir, "WH-4: mine");
+  fs.writeFileSync(path.join(seed, "landed.txt"), "changed on main\n");
+  g(seed, "commit", "-am", "again");
+  g(seed, "push", origin, "main");
+  await ws.ensureClone(repository());
+  assert.deepEqual(await ws.syncBase(dir, "origin/main"), ["landed.txt"]);
+  assert.match(fs.readFileSync(path.join(dir, "landed.txt"), "utf8"), /<<<<<<</);
+  await ws.removeWorktree(REPO, job);
+});
+
 test("a branch name that is not the job's shape is refused", async () => {
   await assert.rejects(ws.createWorktree(repository(), JOB, "main"), /refusing branch/);
   await assert.rejects(ws.createWorktree(repository(), JOB, "wh/../../etc"), /refusing branch/);
