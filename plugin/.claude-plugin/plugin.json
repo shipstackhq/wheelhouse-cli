@@ -14,7 +14,7 @@
     "knowledge-map",
     "project-management"
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "userConfig": {
     "server_url": {
       "type": "string",
