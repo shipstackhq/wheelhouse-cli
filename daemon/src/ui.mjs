@@ -40,11 +40,11 @@ function paint(line, level) {
 }
 
 /**
- * The header: the wordmark and its wake in a double frame, and below it who makes it and what is running. One line when the terminal
+ * The header: the wordmark and its wake in a double frame, and below it who makes it (left) and the version (right). One line when the terminal
  * is narrower than the frame. The frame's ╔═╗║╚╝ are in code page 437, so it looks the same on every terminal.
  */
 export function header({ version, channel, level = detectLevel(), columns = process.stdout.columns ?? 80 } = {}) {
-  const tag = ["daemon", version && `v${version}`, channel].filter(Boolean).join(" · ");
+  const tag = [version && `v${version}`, channel].filter(Boolean).join(" · ");
   if (level === "plain") return `wheelhouse ${tag}`;
   const width = [...WORDMARK[0]].length;
   const inner = width + 4;
@@ -58,7 +58,7 @@ export function header({ version, channel, level = detectLevel(), columns = proc
     row(paint(wake(width), level)),
     row(" ".repeat(width)),
     dim(`╚${"═".repeat(inner)}╝`),
-    dim(`by shipstack.run · ${tag}`.padStart(inner + 2)),
+    dim(`by shipstack.run${tag.padStart(inner + 2 - "by shipstack.run".length)}`),
     "",
   ].join("\n");
 }
