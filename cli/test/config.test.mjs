@@ -48,11 +48,11 @@ test("the plugin's options are the fallback, and WHEELHOUSE_* and flags come fir
 
 test("integrations lists Claude Code, marks it installed from Claude's plugin list, and runs its hook", () => {
   const run = (args) => spawnSync("node", [script, ...args], { cwd: repo, input: "{}", encoding: "utf8", env: { PATH: process.env.PATH, HOME: home, WHEELHOUSE_KEYSTORE: "file" } });
-  assert.match(run(["integrations"]).stdout, /^· claude-code/);
+  assert.match(run(["integrations"]).stdout, /^o claude-code/);
   const plugins = path.join(home, ".claude", "plugins", "installed_plugins.json");
   fs.mkdirSync(path.dirname(plugins), { recursive: true });
   fs.writeFileSync(plugins, JSON.stringify({ plugins: { "wheelhouse@shipstack": [{}] } }));
-  assert.match(run(["integrations"]).stdout, /^✓ claude-code/);
+  assert.match(run(["integrations"]).stdout, /^\+ claude-code/);
   assert.equal(run(["integrations", "claude-code", "hook", "session-end"]).status, 0);
   assert.equal(run(["integrations", "nope"]).status, 1);
   assert.match(run(["integrations", "claude-code"]).stderr, /Usage: wheelhouse integrations claude-code <hook \| install>/);
@@ -61,8 +61,15 @@ test("integrations lists Claude Code, marks it installed from Claude's plugin li
 test("doctor names the fix for each problem and exits non-zero when something is broken", () => {
   const r = spawnSync("node", [script, "doctor"], { cwd: repo, encoding: "utf8", env: { PATH: process.env.PATH, HOME: home, WHEELHOUSE_KEYSTORE: "file" } });
   assert.equal(r.status, 1);
-  assert.match(r.stdout, /✗ key: none for http:\/\/repo\.example\n {4}→ wheelhouse login --url http:\/\/repo\.example/);
-  assert.match(r.stdout, /✓ repo linked to team QQ/);
-  assert.match(r.stdout, /✗ git hooks missing/);
-  assert.match(r.stdout, /· daemon: not paired/);
+  assert.match(r.stdout, /x key: none for http:\/\/repo\.example\n {2}> wheelhouse login --url http:\/\/repo\.example/);
+  assert.match(r.stdout, /\+ repo linked to team QQ/);
+  assert.match(r.stdout, /x git hooks missing/);
+  assert.match(r.stdout, /o daemon: not paired/);
+});
+
+test("read commands take --json for scripts", () => {
+  const run = (args) => JSON.parse(spawnSync("node", [script, ...args, "--json"], { cwd: repo, encoding: "utf8", env: { PATH: process.env.PATH, HOME: home, WHEELHOUSE_KEYSTORE: "file" } }).stdout);
+  assert.equal(run(["whoami"]).team, "QQ");
+  assert.equal(run(["integrations"])[0].name, "claude-code");
+  assert.ok(run(["doctor"]).some((c) => c.state === "fail" && c.fix));
 });

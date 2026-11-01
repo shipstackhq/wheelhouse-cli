@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // wheelhouse: CLI + Claude Code hook runner for Shipstack Wheelhouse.
 //
-// Zero dependencies (Node >= 18). The Claude Code plugin bundles this file, so
-// it must stay self-contained. Content hashes are git blob ids (`git hash-object`),
+// Zero dependencies (Node >= 18); ../lib holds what it shares with the daemon
+// (terminal look, Keychain). Content hashes are git blob ids (`git hash-object`),
 // which match committed blobs exactly.
 //
 // Every hook fails OPEN: if Wheelhouse is unreachable or anything throws, the
@@ -12,6 +12,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { keychainGet, keychainSet } from "../lib/keychain.mjs";
+import { detectLevel, header, sym } from "../lib/ui.mjs";
 
 const VERSION = "0.2.0";
 const CONFIG_FILE = "wheelhouse.json"; // committed: { url, team, defaultBranch }
@@ -133,22 +135,12 @@ const keyStoreName = () => (useKeychain() ? "Keychain" : CRED_FILE);
 
 function loadKey(url) {
   migrateOldCredentials();
-  if (!useKeychain()) return readJson(CRED_FILE, {})[url] || "";
-  try {
-    return execFileSync("security", ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", url, "-w"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-  } catch {
-    return "";
-  }
+  return (useKeychain() ? keychainGet(KEYCHAIN_SERVICE, url) : readJson(CRED_FILE, {})[url]) || "";
 }
 
 /** Save a key for a server; chmod too, because the mode on writeFile only applies when the file is created. */
 function saveCredential(url, key) {
-  if (useKeychain()) {
-    // `security -i` reads the command from stdin, so the key never shows in the process list.
-    const r = spawnSync("security", ["-i"], { input: `add-generic-password -U -s "${KEYCHAIN_SERVICE}" -a "${url}" -l "Wheelhouse (${url})" -w "${key}"\n`, encoding: "utf8" });
-    if (r.status !== 0) throw new Error(`could not save the key in the Keychain: ${(r.stderr || r.stdout || "").trim()}`);
-    return;
-  }
+  if (useKeychain()) return keychainSet(KEYCHAIN_SERVICE, url, `Wheelhouse (${url})`, key);
   const creds = readJson(CRED_FILE, {});
   creds[url] = key;
   writeJson(CRED_FILE, creds, 0o600);
@@ -800,7 +792,9 @@ function installClaudeCode(flags) {
 async function cmdIntegrations(flags) {
   const [name, sub, ...args] = flags._;
   if (!name) {
-    for (const [n, it] of Object.entries(INTEGRATIONS)) console.log(`${it.installed() ? "✓" : "·"} ${n.padEnd(12)} ${it.about}`);
+    const list = Object.entries(INTEGRATIONS).map(([n, it]) => ({ name: n, installed: it.installed(), about: it.about }));
+    if (flags.json) return console.log(JSON.stringify(list, null, 2));
+    for (const it of list) console.log(`${sym(it.installed ? "ok" : "off")} ${it.name.padEnd(12)} ${it.about}`);
     return;
   }
   const it = INTEGRATIONS[name];
@@ -826,12 +820,9 @@ async function cmdDoctor(flags) {
     /* not in a repo */
   }
   const cfg = loadConfig(root || process.cwd(), flags);
-  let failed = 0;
-  // ✓ fine, ✗ broken (with the fix), · optional and not set up.
-  const line = (state, what, fix) => {
-    if (state === "✗") failed++;
-    console.log(`${state} ${what}${fix ? `\n    → ${fix}` : ""}`);
-  };
+  const checks = [];
+  // ok: fine, fail: broken (with the fix), off: optional and not set up.
+  const line = (state, what, fix) => checks.push({ state: { "✓": "ok", "✗": "fail", "·": "off" }[state], check: what, ...(fix ? { fix } : {}) });
 
   if (!cfg.url) line("✗", "server: not set", "run inside a linked repo, pass --url, or `wheelhouse init --team KEY`");
   else if (!cfg.key) line("✗", `key: none for ${cfg.url}`, `wheelhouse login --url ${cfg.url}`);
@@ -860,7 +851,10 @@ async function cmdDoctor(flags) {
   }
 
   for (const [name, it] of Object.entries(INTEGRATIONS)) line(it.installed() ? "✓" : "·", `integration ${name}: ${it.installed() ? "installed" : "not installed"}`, it.installed() ? "" : it.fix);
-  if (failed) process.exit(1);
+
+  if (flags.json) console.log(JSON.stringify(checks, null, 2));
+  else for (const c of checks) console.log(`${sym(c.state)} ${c.check}${c.fix ? `\n  ${sym("arrow")} ${c.fix}` : ""}`);
+  if (checks.some((c) => c.state === "fail")) process.exit(1);
 }
 
 async function cmdWhoami(flags) {
@@ -871,15 +865,15 @@ async function cmdWhoami(flags) {
     /* not in a repo: no wheelhouse.json */
   }
   const cfg = loadConfig(root, flags);
+  const check = cfg.url && cfg.key ? await checkKey(cfg.url, cfg.key) : null;
+  if (flags.json) return console.log(JSON.stringify({ server: cfg.url || null, team: cfg.team || null, key: cfg.key ? cfg.key.slice(0, 7) + "…" : null, from: cfg.from, check: check?.state ?? null }, null, 2));
   if (!cfg.url) return console.log("No server here: run this in a repo linked with `wheelhouse init`, or pass --url.");
   const from = (k) => (cfg.from[k] ? `  (${cfg.from[k]})` : "");
-  console.log(`server:   ${cfg.url || "(not set)"}${from("url")}`);
+  console.log(`server:   ${cfg.url}${from("url")}`);
   console.log(`team:     ${cfg.team || "(not set)"}${from("team")}`);
   console.log(`key:      ${cfg.key ? cfg.key.slice(0, 7) + "…" : "(not set)"}${from("key")}`);
-  if (!cfg.url || !cfg.key) return;
-  const r = await checkKey(cfg.url, cfg.key);
-  console.log(`check:    ${r.state === "ok" ? "✓ key accepted" : r.state === "rejected" ? "✗ key rejected: run `wheelhouse login`" : `✗ unreachable (${r.message})`}`);
-}
+  if (!check) return;
+  console.log(`check:    ${check.state === "ok" ? `${sym("ok")} key accepted` : check.state === "rejected" ? `${sym("fail")} key rejected: run \`wheelhouse login\`` : `${sym("fail")} unreachable (${check.message})`}`);}
 
 async function cmdStatus(flags) {
   const root = repoRoot();
@@ -947,13 +941,14 @@ const HELP = `wheelhouse ${VERSION}: Shipstack Wheelhouse CLI
   init --team KEY [--url URL] [--key wh_...] link this repo, install git hooks, record baseline hashes
   login [--url URL]                             prompt (URL defaults to the hosted Wheelhouse) for an API key (hidden), check it, and save it. Scripts: login --url URL --key wh_...
   status                                        show config and server state
-  doctor                                        check the server, key, repo link, git hooks, daemon and integrations; prints a fix for each problem
-  whoami                                        show the server, team and key in use, where each came from, and whether the key works
+  doctor [--json]                               check the server, key, repo link, git hooks, daemon and integrations; prints a fix for each problem
+  whoami [--json]                               show the server, team and key in use, where each came from, and whether the key works
   context [ISSUE]                               print the team briefing (writes .wheelhouse/context.md) or an issue's context
   sync                                          report working-copy changes as a session (for non-Claude Code workflows)
   land [--baseline|--flush] [--from REF --to REF]  report what landed on the default branch. Git hooks only queue it; --flush sends the queue
-  integrations [NAME COMMAND]                   list agent integrations, or run one's command: claude-code install [--from SOURCE] | claude-code hook <session-start | post-edit | pre-bash | post-bash | pre-mcp | prompt | stop | session-end>
+  integrations [--json] [NAME COMMAND]          list agent integrations, or run one's command: claude-code install [--from SOURCE] | claude-code hook <session-start | post-edit | pre-bash | post-bash | pre-mcp | prompt | stop | session-end>
 
+--plain: no colour or Unicode (also when output is not a terminal, or NO_COLOR is set).
 Config: ${CONFIG_FILE} (url, team, defaultBranch; commit it). Key: WHEELHOUSE_KEY, then 'wheelhouse login' (macOS Keychain, else ~/.wheelhouse/credentials.json), then the plugin's api_key option.
 `;
 
@@ -983,8 +978,10 @@ async function main() {
       return cmdSync(flags);
     case "--version":
     case "-v":
-      return console.log(VERSION);
+      // Scripts get the bare number; a person in a terminal gets the header.
+      return console.log(detectLevel() === "plain" ? VERSION : header({ version: VERSION }));
     default:
+      if (detectLevel() !== "plain") console.log(header({ version: VERSION }));
       return console.log(HELP);
   }
 }

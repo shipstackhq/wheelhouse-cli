@@ -14,7 +14,7 @@ import { DEFAULT_CONFIG, loadConfig, paths, saveConfig } from "./config.mjs";
 import { exportPrivateKey, generateKeyPair } from "./crypto.mjs";
 import { log, runDaemon, VERSION } from "./daemon.mjs";
 import { deleteKey, loadKey, storeKey } from "./keystore.mjs";
-import { detectLevel, header } from "./ui.mjs";
+import { detectLevel, header } from "../../cli/lib/ui.mjs";
 
 function args(argv) {
   const out = { _: [] };

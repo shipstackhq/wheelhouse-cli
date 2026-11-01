@@ -1,10 +1,10 @@
-# Daemon CLI look and feel
+# CLI look and feel
 
-How `wheelhouse-daemon` draws in a terminal. Zero dependencies: plain Node and ANSI codes (`src/ui.mjs`).
+How `wheelhouse` and `wheelhouse-daemon` draw in a terminal. Zero dependencies: plain Node and ANSI codes (`lib/ui.mjs`, shared by both).
 
 ## Three output levels
 
-The daemon picks one at start and never mixes them.
+Each command picks one at start and never mixes them.
 
 | Level | When | What it draws |
 |---|---|---|
@@ -33,11 +33,11 @@ The logo uses only characters from code page 437 so it looks the same everywhere
 
 ## Rules
 
-1. The header (logo) shows on no command, `--help`, `--version`, and after `pair` and `install`. Never in `run`: its output is the service log.
+1. The header (logo) shows on no command, `--help`, `--version`, and after `pair` and `install`. Never in the daemon's `run` (its output is the service log) or in `wheelhouse integrations … hook` (Claude Code reads it).
 2. One meaning per symbol and colour: green `✓` ok, red `✗` failed, yellow `!` warning, cyan `●` running, dim `○` stopped.
 3. Columns line up in `status` and `doctor`.
 4. Slow steps (pairing, updating, cloning) show a spinner that becomes `✓` or `✗`.
-5. Every error says what to do next: `✗ not paired — run wheelhouse-daemon pair --server <url>`.
+5. Every error says what to do next: `✗ not paired` then `→ wheelhouse-daemon pair --server <url>`.
 6. `--json` on read commands for scripts.
 7. Fit 80 columns; the header shrinks to a one-line wordmark below 50.
 

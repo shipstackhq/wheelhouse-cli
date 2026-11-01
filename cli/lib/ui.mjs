@@ -1,4 +1,4 @@
-// How the daemon draws in a terminal (see CLI-UI.md). Zero dependencies: plain ANSI codes.
+// How the wheelhouse CLI and daemon draw in a terminal (see ../CLI-UI.md). Zero dependencies: plain ANSI codes.
 //
 //   full   Unicode, 24-bit colour            (macOS, Linux desktops and SSH, Windows Terminal, VS Code)
 //   basic  code page 437 only, 16 colours    (old Windows console, Linux text console)
@@ -13,6 +13,15 @@ export function detectLevel({ env = process.env, stream = process.stdout, platfo
       ? Boolean(env.WT_SESSION || env.TERM_PROGRAM === "vscode")
       : env.TERM !== "linux" && /utf-?8/i.test(env.LC_ALL || env.LC_CTYPE || env.LANG || "UTF-8");
   return unicode ? "full" : "basic";
+}
+
+// Status symbols: [full, basic and plain, colour]. One meaning each.
+const SYMBOLS = { ok: ["✓", "+", 32], fail: ["✗", "x", 31], warn: ["!", "!", 33], on: ["●", "*", 36], off: ["○", "o", 2], arrow: ["→", ">", 2] };
+
+/** A status symbol for this output level: coloured Unicode on full, coloured ASCII on basic, bare ASCII on plain. */
+export function sym(name, level = detectLevel()) {
+  const [unicode, ascii, colour] = SYMBOLS[name];
+  return level === "plain" ? ascii : `\x1b[${colour}m${level === "full" ? unicode : ascii}\x1b[0m`;
 }
 
 // The wordmark, two rows of half blocks. Only code page 437 characters, so it looks the same on every terminal.

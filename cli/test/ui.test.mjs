@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { detectLevel, header } from "../src/ui.mjs";
+import { detectLevel, header } from "../lib/ui.mjs";
 
 const tty = { isTTY: true };
 const level = (env, platform = "darwin", stream = tty, argv = []) => detectLevel({ env, platform, stream, argv });
