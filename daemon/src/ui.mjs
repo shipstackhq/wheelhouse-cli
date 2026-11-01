@@ -39,38 +39,26 @@ function paint(line, level) {
   return `\x1b[36m${line.slice(0, half)}\x1b[34m${line.slice(half)}\x1b[0m`;
 }
 
-// The Shipstack pennant, rasterised from the logo at 12x8 pixels: orange, blue, yellow, green bands.
-const PENNANT = ["....O.......", "...OOO......", "...OOOO.....", "..BBBOOOO...", "..BBBBBOOO..", ".YYYBBBBOOO.", ".YYYYYYBB...", "GGG........."];
-const BAND = { O: [246, 80, 0, 31], B: [49, 113, 242, 34], Y: [249, 201, 51, 33], G: [34, 197, 94, 32] }; // r, g, b, ANSI 16
-const fg = (c, level) => (level === "full" ? `38;2;${c[0]};${c[1]};${c[2]}` : `${c[3]}`);
-const bg = (c, level) => (level === "full" ? `48;2;${c[0]};${c[1]};${c[2]}` : `${c[3] + 10}`);
-
-/** Two pixel rows per text row: the top pixel is the ▀'s colour, the bottom one its background. Only ▀ ▄ and space, so code page 437. */
-function pennant(level) {
-  const rows = [];
-  for (let r = 0; r < PENNANT.length; r += 2) {
-    rows.push([...PENNANT[r]].map((t, c) => {
-      const top = BAND[t], bottom = BAND[PENNANT[r + 1][c]];
-      if (top && bottom) return `\x1b[${fg(top, level)};${bg(bottom, level)}m▀\x1b[0m`;
-      if (top) return `\x1b[${fg(top, level)}m▀\x1b[0m`;
-      if (bottom) return `\x1b[${fg(bottom, level)}m▄\x1b[0m`;
-      return " ";
-    }).join(""));
-  }
-  return rows;
-}
-
 /**
- * The header: the Shipstack pennant, the wordmark, its wake, and what is running. Without the pennant when the terminal is too narrow
- * for both, and one line when it is narrower than the wordmark.
+ * The header: the wordmark and its wake in a double frame, and below it who makes it and what is running. One line when the terminal
+ * is narrower than the frame. The frame's ╔═╗║╚╝ are in code page 437, so it looks the same on every terminal.
  */
 export function header({ version, channel, level = detectLevel(), columns = process.stdout.columns ?? 80 } = {}) {
   const tag = ["daemon", version && `v${version}`, channel].filter(Boolean).join(" · ");
   if (level === "plain") return `wheelhouse ${tag}`;
   const width = [...WORDMARK[0]].length;
-  if (columns < width + 2) return `${paint("▓▒░", level)} wheelhouse ${dim(tag)}`;
-  const right = [...WORDMARK.map((row) => paint(row, level)), paint(wake(width), level), dim(`by shipstack · ${tag}`.padStart(width))];
-  if (columns < width + PENNANT[0].length + 4) return ["", ...right, ""].join("\n");
-  const left = pennant(level);
-  return ["", ...right.map((line, i) => ` ${left[i]}  ${line}`), ""].join("\n");
+  const inner = width + 4;
+  if (columns < inner + 2) return `${paint("▓▒░", level)} wheelhouse ${dim(tag)}`;
+  const row = (line) => `${dim("║")}  ${line}  ${dim("║")}`;
+  return [
+    "",
+    dim(`╔${"═".repeat(inner)}╗`),
+    row(" ".repeat(width)),
+    ...WORDMARK.map((line) => row(paint(line, level))),
+    row(paint(wake(width), level)),
+    row(" ".repeat(width)),
+    dim(`╚${"═".repeat(inner)}╝`),
+    dim(`by shipstack.run · ${tag}`.padStart(inner + 2)),
+    "",
+  ].join("\n");
 }
