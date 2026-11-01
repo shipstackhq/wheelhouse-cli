@@ -73,3 +73,10 @@ test("read commands take --json for scripts", () => {
   assert.equal(run(["integrations"])[0].name, "claude-code");
   assert.ok(run(["doctor"]).some((c) => c.state === "fail" && c.fix));
 });
+
+test("daemon forwards to the daemon next to the CLI, and passes its exit code through", () => {
+  const run = (args) => spawnSync("node", [script, "daemon", ...args], { cwd: repo, encoding: "utf8", env: { PATH: process.env.PATH, HOME: home, WHEELHOUSE_DAEMON_HOME: path.join(home, "daemon") } });
+  assert.match(run(["status"]).stdout, /Not paired/);
+  assert.equal(run(["nope"]).status, 2);
+  assert.match(run(["logs"]).stdout, /No logs yet/);
+});

@@ -870,6 +870,41 @@ async function cmdNew(flags) {
   console.log(`${sym("ok")} created ${r.ref}: ${r.title}`);
 }
 
+// ───────── daemon ─────────
+// `wheelhouse daemon …` forwards to the daemon that sits next to this CLI (daemon/ in the same checkout). The standalone
+// `wheelhouse-daemon` stays for servers. Until the daemon is packaged, only a checkout of the repo has one.
+
+const DAEMON_HOME = process.env.WHEELHOUSE_DAEMON_HOME || path.join(HOME_DIR, "daemon"); // the daemon's own settings and logs
+const DAEMON_DIR = path.resolve(path.dirname(fs.realpathSync(process.argv[1])), "..", "..", "daemon");
+
+function cmdDaemon(flags) {
+  const [sub = "help", ...rest] = process.argv.slice(3);
+  if (!fs.existsSync(path.join(DAEMON_DIR, "src", "cli.mjs"))) {
+    console.error(`${sym("fail", detectLevel({ stream: process.stderr }))} No daemon next to this CLI (${DAEMON_DIR}). It ships with the CLI once it is packaged; until then run it from a checkout of shipstackhq/wheelhouse-cli.`);
+    process.exit(1);
+  }
+  const run = (cmd, args) => process.exit(spawnSync(cmd, args, { stdio: "inherit" }).status ?? 1);
+  const entry = path.join(DAEMON_DIR, "src", "main.mjs");
+  const platform = path.join(DAEMON_DIR, "platform");
+  const dry = flags["dry-run"];
+  if (sub === "install" || sub === "uninstall") {
+    if (process.platform === "darwin") return run("sh", [path.join(platform, "macos", `${sub}.sh`), ...(sub === "install" ? ["--entry", entry] : []), ...(dry ? ["--dry-run"] : [])]);
+    if (process.platform === "win32")
+      return run("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(platform, "windows", `${sub}.ps1`), ...(sub === "install" ? ["-Entry", entry] : []), ...(dry ? ["-WhatIf"] : [])]);
+    console.error(`No background service for ${process.platform} yet. Run it in the foreground: wheelhouse daemon run`);
+    process.exit(1);
+  }
+  if (sub === "logs") {
+    const files = ["out", "err"].map((k) => path.join(DAEMON_HOME, "logs", `wheelhouse-daemon.${k}.log`)).filter((f) => fs.existsSync(f));
+    if (!files.length) return console.log("No logs yet: the background service writes them (wheelhouse daemon install).");
+    const follow = rest.includes("-f") || rest.includes("--follow");
+    const lines = Number(rest[rest.findIndex((a) => a === "-n" || a === "--lines") + 1]) || 50;
+    return run("tail", [...(follow ? ["-f"] : []), "-n", String(lines), ...files]);
+  }
+  // pair, status, unpair, run, help: the daemon's own commands.
+  run(process.execPath, [path.join(DAEMON_DIR, "src", "cli.mjs"), sub, ...rest]);
+}
+
 // ───────── integrations ─────────
 // Commands for one agent tool live under `wheelhouse integrations <name>`, so the top level stays about Wheelhouse.
 
@@ -952,7 +987,7 @@ async function cmdDoctor(flags) {
     line(ok ? "✓" : "✗", `git hooks ${ok ? "installed" : "missing"}`, ok ? "" : "wheelhouse init (installs them again)");
   }
 
-  const daemon = readJson(path.join(HOME_DIR, "daemon", "config.json"), {});
+  const daemon = readJson(path.join(DAEMON_HOME, "config.json"), {});
   if (!daemon.deviceId) line("·", "daemon: not paired (only needed to run agents on this machine)", "wheelhouse-daemon pair --server <url>");
   else {
     const running = process.platform !== "darwin" || spawnSync("launchctl", ["print", `gui/${process.getuid()}/com.shipstack.wheelhouse-daemon`], { stdio: "ignore" }).status === 0;
@@ -1057,6 +1092,8 @@ const HELP = `wheelhouse ${VERSION}: Shipstack Wheelhouse CLI
   done WH-12                                    move it to In Review
   comment WH-12 "text"                          comment on it
   new "title" [--body T] [--priority P] [--cycle current]  create an issue
+  daemon status | pair --server URL | unpair | run | install [--dry-run] | uninstall | logs [-n N] [-f]
+                                                the agent daemon on this machine (forwards to wheelhouse-daemon)
   doctor [--json]                               check the server, key, repo link, git hooks, daemon and integrations; prints a fix for each problem
   whoami [--json]                               show the server, team and key in use, where each came from, and whether the key works
   context [ISSUE]                               print the team briefing (writes .wheelhouse/context.md) or an issue's context
@@ -1090,6 +1127,8 @@ async function main() {
       return cmdWhoami(flags);
     case "doctor":
       return cmdDoctor(flags);
+    case "daemon":
+      return cmdDaemon(flags);
     case "issues":
       return cmdIssues(flags);
     case "issue":

@@ -20,6 +20,8 @@ wheelhouse start WH-12 [--no-branch]                     claim it, move it to In
 wheelhouse done WH-12                                    move it to In Review
 wheelhouse comment WH-12 "text"                          comment on it
 wheelhouse new "title" [--priority P] [--cycle current]  create an issue
+wheelhouse daemon status | pair --server URL | unpair | run | install [--dry-run] | uninstall | logs [-n N] [-f]
+                                                         the agent daemon on this machine (forwards to the daemon in this checkout)
 wheelhouse doctor                                        check the server, key, repo link, git hooks, daemon and integrations; a fix for each problem
 wheelhouse whoami                                        the server, team and key in use, where each came from, and whether the key works
 wheelhouse context [ISSUE]                               print the team briefing (and write .wheelhouse/context.md) or an issue's context
