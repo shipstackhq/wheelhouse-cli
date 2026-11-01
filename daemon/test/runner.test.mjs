@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { DEFAULT_RUNNER } from "../src/config.mjs";
 import { chatArgs, chatParser, runChat } from "../src/runner/chat.mjs";
-import { buildPrompt, claudeArgs, eventsFrom, runClaude, toolSummary } from "../src/runner/claude.mjs";
+import { buildPrompt, claudeArgs, eventsFrom, runClaude, scrub, toolSummary } from "../src/runner/claude.mjs";
 
 // A stand-in for the claude CLI: prints stream-json like `claude -p --output-format stream-json`, records its arguments, and with
 // FAKE_CLAUDE_HANG stays alive until it is killed.
@@ -300,4 +300,13 @@ out({ type: "result", is_error: false, session_id: "s1", result: "ok" });
   assert.ok(!JSON.stringify(events).includes("wh_secret123"));
   assert.equal(events.find((e) => e.type === "tool").data.summary, "wheelhouse: get_issue WH-42");
   assert.ok(!fs.existsSync(seen.f), "config removed after the answer");
+});
+
+test("scrub: paths read relative to the run's checkout, the rest of home as ~", () => {
+  const run = "/Users/ann/.wheelhouse/daemon/chats/9e58/413f";
+  assert.equal(scrub(`${run}/backend/routes/submit.py`, "/Users/ann"), "backend/routes/submit.py");
+  assert.equal(scrub(`cd ${run} && ls`, "/Users/ann"), "cd . && ls");
+  assert.equal(scrub("/Users/ann/.wheelhouse/daemon/worktrees/a/b/src/x.ts", "/Users/ann"), "src/x.ts");
+  assert.equal(scrub("cat /Users/ann/.zshrc", "/Users/ann"), "cat ~/.zshrc");
+  assert.equal(scrub("/etc/hosts", "/Users/ann"), "/etc/hosts");
 });

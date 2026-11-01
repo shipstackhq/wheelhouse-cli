@@ -136,8 +136,23 @@ export const short = (s, n = 300) => {
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 };
 
+/**
+ * Paths as the team should see them: relative to the run's checkout (a chat or job folder under the daemon's home), and `~` for the
+ * rest of the home folder. What the daemon reports leaves this machine, so it never names the person's folders.
+ */
+export function scrub(text, home = os.homedir()) {
+  const h = home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return String(text ?? "")
+    .replace(new RegExp(`${h}/\\.wheelhouse/daemon/(?:chats|worktrees)/[^/\\s]+/[^/\\s]+(/?)`, "g"), (_, slash) => (slash ? "" : "."))
+    .replaceAll(home, "~");
+}
+
 /** What to show for a tool call: the file, the command, the pattern. */
 export function toolSummary(name, input = {}) {
+  return scrub(rawSummary(name, input));
+}
+
+function rawSummary(name, input) {
   const mcp = /^mcp__([^_]+)__(.+)$/.exec(name); // an MCP tool: "wheelhouse: get_issue WH-42"
   if (mcp) {
     const arg = [input.ref, input.issue, input.id, input.key, input.query].find((v) => typeof v === "string") ?? (typeof input.title === "string" ? `"${input.title}"` : "");
@@ -162,7 +177,7 @@ export function eventsFrom(line) {
   if (m.type === "assistant" && Array.isArray(m.message?.content)) {
     const out = [];
     for (const c of m.message.content) {
-      if (c.type === "text" && c.text?.trim()) out.push({ type: "text", data: { text: short(c.text, 600) } });
+      if (c.type === "text" && c.text?.trim()) out.push({ type: "text", data: { text: short(scrub(c.text), 600) } });
       if (c.type === "tool_use") out.push({ type: "tool", data: { name: c.name, summary: toolSummary(c.name, c.input) } });
     }
     return out;
@@ -180,7 +195,7 @@ export function eventsFrom(line) {
           numTurns: m.num_turns ?? null,
           costUsd: typeof m.total_cost_usd === "number" ? m.total_cost_usd : null,
           durationMs: m.duration_ms ?? null,
-          text: short(text, 1000),
+          text: short(text, 20_000),
           ...(learnings.length ? { learnings } : {}),
         },
       },
