@@ -57,6 +57,13 @@ function reviewPrompt(offer) {
     .join("\n");
 }
 
+/** After a self-check failure (WH-171): which checks failed, with the end of their output. */
+const fixLines = (fix) =>
+  [
+    "Wheelhouse ran this repository's checks on your work and these failed. Fix them, commit, and finish again; do not ask whether to.",
+    ...fix.map((c) => `Check "${c.name}" (\`${c.command}\`) exited ${c.exitCode}:\n${c.tail}`),
+  ].join("\n\n");
+
 /** Build the agent's instructions from the issue. */
 export function buildPrompt(offer) {
   if (offer.mode === "review" && offer.review?.pullRequest) return reviewPrompt(offer);
@@ -71,6 +78,7 @@ export function buildPrompt(offer) {
     offer.previous
       ? `You are in a git worktree of ${repository.fullName ?? repository.name}, on the branch ${branch}, which already holds the earlier attempt's commits. Its pull request (if any) targets ${offer.baseBranch ?? repository.defaultBranch}.`
       : `You are in a fresh git worktree of ${repository.fullName ?? repository.name}, on the branch ${branch}, made from ${offer.baseBranch ?? repository.defaultBranch}.`,
+    offer.fix ? fixLines(offer.fix) : null,
     offer.baseSync === "merged" ? `Wheelhouse merged the latest ${offer.baseBranch ?? repository.defaultBranch} into this branch before you started, so work that landed since is here.` : null,
     Array.isArray(offer.baseSync) ? `The latest ${offer.baseBranch ?? repository.defaultBranch} conflicts with this branch in ${offer.baseSync.join(", ") || "some files"}. Wheelhouse started the merge and left the conflict markers: resolve them, commit the merge, then carry on.` : null,
     boardLine(offer),

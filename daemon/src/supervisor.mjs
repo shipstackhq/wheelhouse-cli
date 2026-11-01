@@ -7,6 +7,7 @@
 import { verifySigned } from "./crypto.mjs";
 import { JobReporter } from "./connection.mjs";
 import { isRateLimited } from "./runner/claude.mjs";
+import { MAX_FIX_ATTEMPTS, blocking, runChecks } from "./selfcheck.mjs";
 import { runSetup } from "./workspace.mjs";
 
 const MESSAGE_TYPES = new Set(["job.offer", "job.cancel", "settings.update", "chat.message", "chat.cancel"]);
@@ -215,13 +216,28 @@ export class Supervisor {
       }
       if (signal.aborted) throw new Canceled();
       phase("agent", m.model);
-      const r = await this.runJob({
-        offer: m,
-        cwd,
-        signal,
-        onEvent: (e) => reporter.event(e.type, e.data),
-        onSpawn: (pid) => this.records.update(m.jobId, { pid }),
-      });
+      const agent = (offer) =>
+        this.runJob({
+          offer,
+          cwd,
+          signal,
+          onEvent: (e) => reporter.event(e.type, e.data),
+          onSpawn: (pid) => this.records.update(m.jobId, { pid }),
+        });
+      let r = await agent(m);
+      // WH-171: before anything is pushed, the repository's checks run on what the agent committed. A check that failed goes back to the
+      // agent with its output, up to MAX_FIX_ATTEMPTS times; one that could not run cannot be fixed by the agent, so it just ends the run.
+      let checks = [];
+      const toRun = m.repository.checks ?? [];
+      for (let attempt = 0; !review && r.ok && toRun.length && !superseded() && !signal.aborted; attempt++) {
+        await this.workspace.commitLeftovers(cwd, `${m.issue.ref}: work in progress from the agent run`);
+        phase("checks", toRun.map((c) => c.name).join(", "));
+        checks = await runChecks(toRun, cwd, signal, ({ tail, ...c }) => reporter.event("check", c));
+        const bad = blocking(checks);
+        if (!bad || bad.status !== "failed" || attempt >= MAX_FIX_ATTEMPTS || signal.aborted) break;
+        phase("fixing", `${bad.name} (attempt ${attempt + 1} of ${MAX_FIX_ATTEMPTS})`);
+        r = await agent({ ...m, fix: checks.filter((c) => c.required && c.status === "failed") });
+      }
       if (r.result && isRateLimited(r.result.text)) {
         this.pausedUntil = this.now() + RATE_LIMIT_PAUSE_MS;
         this.log(`usage limit reached: refusing new jobs for ${RATE_LIMIT_PAUSE_MS / 60_000} minutes`);
@@ -244,10 +260,12 @@ export class Supervisor {
           pushed = true;
         }
       }
-      const result = { commit: sum.commit, pushed, diffStats: sum.diffStats, costUsd: r.result?.costUsd ?? null, durationMs: this.now() - started, ...(r.result?.learnings?.length ? { learnings: r.result.learnings } : {}) };
+      const result = { commit: sum.commit, pushed, diffStats: sum.diffStats, costUsd: r.result?.costUsd ?? null, durationMs: this.now() - started, ...(r.result?.learnings?.length ? { learnings: r.result.learnings } : {}), ...(checks.length ? { checks } : {}) };
+      const bad = blocking(checks);
       if (r.stopped === "canceled" || signal.aborted) outcome = { state: "canceled", ...result, error: stopped() };
       else if (r.stopped === "timeout") outcome = { state: "failed", ...result, error: `The agent ran past the ${this.config.runner.timeoutMinutes}-minute limit` };
       else if (!r.ok) outcome = { state: "failed", ...result, error: r.error ?? r.result?.text ?? (r.stderr || `claude exited with ${r.exitCode}`) };
+      else if (bad) outcome = { state: "failed", ...result, error: `Check "${bad.name}" ${bad.status === "failed" ? "failed" : "could not run"}${bad.tail ? `: ${bad.tail.split("\n").slice(-3).join(" ").slice(0, 300)}` : ""}` };
       else outcome = { state: "succeeded", ...result };
     } catch (e) {
       if (!(e instanceof Superseded)) {

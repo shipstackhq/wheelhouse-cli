@@ -1,6 +1,9 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { canonicalJson, publicKeyFromRaw, rawPublicKey } from "../src/crypto.mjs";
 import { Supervisor, SUPERSEDED_REASON } from "../src/supervisor.mjs";
 
@@ -362,4 +365,48 @@ test("shutdown cancels running chats and waits for them to report", async () => 
   await s.sup.handle(sign(m));
   await s.sup.shutdown();
   assert.equal(chatFinish(m).body.state, "canceled");
+});
+
+// WH-171: the repository's checks run before the push; failures go back to the agent, twice at most.
+async function withChecks(checks, agentRuns) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wh-check-"));
+  s.sup.workspace.createWorktree = async () => ({ dir, base: "origin/main" });
+  const prompts = [];
+  s.sup.runJob = async ({ offer: o }) => {
+    prompts.push(o.fix);
+    await agentRuns?.(dir, prompts.length);
+    return { ok: true, exitCode: 0, result: { costUsd: 0.1, text: "done" } };
+  };
+  const m = offer({ repository: { ...offer().repository, checks } });
+  await s.sup.handle(sign(m));
+  const outcome = await s.sup.jobs.get(m.jobId)?.done;
+  fs.rmSync(dir, { recursive: true, force: true });
+  return { outcome, prompts, finish: s.posts.findLast((p) => p.path.endsWith("/finish")).body };
+}
+
+test("a check that keeps failing goes back to the agent twice, then fails the run naming it; the finish lists every check", async () => {
+  const { outcome, prompts, finish } = await withChecks([{ name: "install", command: "true", required: true }, { name: "lint", command: "echo 1 error; exit 1", required: true }]);
+  assert.equal(prompts.length, 3, "the first run and two fixes");
+  assert.equal(prompts[2][0].name, "lint");
+  assert.equal(outcome.state, "failed");
+  assert.match(outcome.error, /Check "lint" failed: 1 error/);
+  assert.deepEqual(finish.checks.map((c) => [c.name, c.status, c.exitCode]), [["install", "passed", 0], ["lint", "failed", 1]]);
+  assert.match(finish.checks[1].tail, /1 error/);
+});
+
+test("a fix that makes the checks pass lets the run succeed", async () => {
+  const { outcome, prompts } = await withChecks([{ name: "lint", command: "test -f fixed", required: true }], (dir, run) => run === 2 && fs.writeFileSync(path.join(dir, "fixed"), ""));
+  assert.equal(prompts.length, 2);
+  assert.equal(outcome.state, "succeeded");
+  assert.equal(outcome.checks[0].status, "passed");
+});
+
+test("a check that cannot run is reported as such, is not retried, and fails the run; an optional one does not", async () => {
+  const gone = await withChecks([{ name: "lint", command: "no-such-tool-wh", required: true }]);
+  assert.equal(gone.prompts.length, 1);
+  assert.equal(gone.outcome.state, "failed");
+  assert.equal(gone.finish.checks[0].status, "could_not_run");
+  const soft = await withChecks([{ name: "build", command: "no-such-tool-wh", required: false }]);
+  assert.equal(soft.outcome.state, "succeeded");
+  assert.equal(soft.outcome.checks[0].status, "could_not_run", "still reported");
 });

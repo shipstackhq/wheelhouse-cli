@@ -191,6 +191,15 @@ MCP config (HTTP server `wheelhouse` at `<server>/mcp`, bearer token) to a 0600 
 (argv would show the key in `ps`, and the worktree is readable by the assistant), passes it with `--mcp-config` under
 `--strict-mcp-config`, allows `mcp__wheelhouse`, and deletes the file when the answer ends. No key: no MCP, as before.
 
+## Self-check (WH-171)
+
+The offer's `repository.checks` (`[{ name, command, cwd?, required }]`, the repository's profile in Wheelhouse) run in the worktree after
+the agent finishes and before the push (`src/selfcheck.mjs`). Each ends `passed`, `failed` (non-zero exit) or `could_not_run` (no such
+tool, bad directory, timeout, stop); none is skipped. A failed required check goes back to the agent with its output tail, at most twice;
+then the run finishes `failed`, naming the check, with the branch still pushed. A check that could not run is not retried. The finish
+carries `checks: [{ name, command, required, status, exitCode, durationMs, tail }]`, and Wheelhouse opens no pull request while a
+required check has not passed.
+
 ## Out of scope for the MVP
 
 The chat agent (phase 2: one long `claude -p --resume <session> --model <current>` per message, with daemon tools only and no
