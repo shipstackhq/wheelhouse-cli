@@ -18,7 +18,7 @@ wheelhouse whoami                                        the server, team and ke
 wheelhouse context [ISSUE]                               print the team briefing (and write .wheelhouse/context.md) or an issue's context
 wheelhouse sync                                          report working-copy changes as a session (for workflows without Claude Code)
 wheelhouse land [--baseline|--flush] [--from REF --to REF]  report what landed on the default branch. Git hooks only queue it locally; --flush sends the queue
-wheelhouse hook <event>                                  Claude Code hook runner (used by the plugin)
+wheelhouse integrations [NAME COMMAND]                   list agent integrations (✓ installed), or run one: `integrations claude-code hook <event>` is what the plugin calls
 ```
 
 ## Configuration

@@ -769,6 +769,36 @@ async function cmdContext(flags) {
   process.stdout.write(r.markdown + "\n");
 }
 
+// ───────── integrations ─────────
+// Commands for one agent tool live under `wheelhouse integrations <name>`, so the top level stays about Wheelhouse.
+
+const INTEGRATIONS = {
+  "claude-code": {
+    about: "Claude Code plugin: hooks keep the board and map in sync with each session",
+    installed: () => Object.keys(readJson(path.join(os.homedir(), ".claude", "plugins", "installed_plugins.json"), {}).plugins || {}).some((k) => k.startsWith("wheelhouse@")),
+    commands: { hook: ([event]) => runHook(event) },
+  },
+};
+
+async function cmdIntegrations(flags) {
+  const [name, sub, ...args] = flags._;
+  if (!name) {
+    for (const [n, it] of Object.entries(INTEGRATIONS)) console.log(`${it.installed() ? "✓" : "·"} ${n.padEnd(12)} ${it.about}`);
+    return;
+  }
+  const it = INTEGRATIONS[name];
+  if (!it) {
+    console.error(`Unknown integration "${name}". Available: ${Object.keys(INTEGRATIONS).join(", ")}.`);
+    process.exit(1);
+  }
+  const run = it.commands[sub];
+  if (!run) {
+    console.error(`Usage: wheelhouse integrations ${name} <${Object.keys(it.commands).join(" | ")}>`);
+    process.exit(1);
+  }
+  return run(args);
+}
+
 async function cmdWhoami(flags) {
   let root = process.cwd();
   try {
@@ -856,7 +886,7 @@ const HELP = `wheelhouse ${VERSION}: Shipstack Wheelhouse CLI
   context [ISSUE]                               print the team briefing (writes .wheelhouse/context.md) or an issue's context
   sync                                          report working-copy changes as a session (for non-Claude Code workflows)
   land [--baseline|--flush] [--from REF --to REF]  report what landed on the default branch. Git hooks only queue it; --flush sends the queue
-  hook <event>                                  Claude Code hook runner: session-start | post-edit | pre-bash | post-bash | prompt | stop | session-end
+  integrations [NAME COMMAND]                   list agent integrations, or run one's command: claude-code hook <session-start | post-edit | pre-bash | post-bash | pre-mcp | prompt | stop | session-end>
 
 Config: ${CONFIG_FILE} (url, team, defaultBranch; commit it). Key: WHEELHOUSE_KEY, then 'wheelhouse login' (macOS Keychain, else ~/.wheelhouse/credentials.json), then the plugin's api_key option.
 `;
@@ -865,8 +895,10 @@ async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   const flags = parseArgs(rest);
   switch (cmd) {
-    case "hook":
+    case "hook": // hidden alias for `integrations claude-code hook`, while installed plugins update
       return runHook(flags._[0]);
+    case "integrations":
+      return cmdIntegrations(flags);
     case "init":
       return cmdInit(flags);
     case "login":
