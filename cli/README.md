@@ -14,6 +14,12 @@ It has no dependencies and runs on Node 18+ with git.
 wheelhouse init --team KEY [--url URL] [--key wh_...] link this repo, install git hooks, record baseline hashes
 wheelhouse login [--url URL]                             prompt (URL defaults to https://wheelhouse.shipstack.run) for an API key (hidden), check it, store it (scripts: --url URL --key wh_...)
 wheelhouse status                                        config and server state
+wheelhouse issues [--mine] [--status S] [--cycle current] [--text T]  open issues, most urgent first (--json)
+wheelhouse issue WH-12                                   an issue with its description and comments (--json)
+wheelhouse start WH-12 [--no-branch]                     claim it, move it to In Progress, switch to branch wh/WH-12-<title>
+wheelhouse done WH-12                                    move it to In Review
+wheelhouse comment WH-12 "text"                          comment on it
+wheelhouse new "title" [--priority P] [--cycle current]  create an issue
 wheelhouse doctor                                        check the server, key, repo link, git hooks, daemon and integrations; a fix for each problem
 wheelhouse whoami                                        the server, team and key in use, where each came from, and whether the key works
 wheelhouse context [ISSUE]                               print the team briefing (and write .wheelhouse/context.md) or an issue's context
@@ -32,7 +38,8 @@ Each setting comes from the first of these that is set (`wheelhouse whoami` show
 2. `WHEELHOUSE_URL`, `WHEELHOUSE_KEY`, `WHEELHOUSE_TEAM`
 3. the key saved by `wheelhouse login`, per server URL: the macOS Keychain, or `~/.wheelhouse/credentials.json` (mode 600) elsewhere
 4. `wheelhouse.json` (url, team)
-5. the Claude Code plugin's `server_url` and `api_key` options, as a fallback
+5. `~/.wheelhouse/config.json`: the default server (saved by `wheelhouse login`) and team (saved by your first `wheelhouse init`), so board commands work in any folder. An issue ref like `WH-12` also names its team.
+6. the Claude Code plugin's `server_url` and `api_key` options, as a fallback
 
 Keys saved by older versions in `~/.config/wheelhouse/credentials.json` move over on first use.
 

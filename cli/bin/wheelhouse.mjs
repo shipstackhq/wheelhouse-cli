@@ -20,6 +20,7 @@ const CONFIG_FILE = "wheelhouse.json"; // committed: { url, team, defaultBranch 
 const STATE_DIR = ".wheelhouse"; // gitignored: context.md, sessions/, hook.log
 const HOME_DIR = path.join(os.homedir(), ".wheelhouse"); // per user: credentials (off macOS), daemon/
 const CRED_FILE = path.join(HOME_DIR, "credentials.json");
+const USER_CONFIG = path.join(HOME_DIR, "config.json"); // default { url, team } for commands run outside a linked repo
 const OLD_CRED_FILE = path.join(os.homedir(), ".config", "wheelhouse", "credentials.json"); // before 0.2.0
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const BASELINE_PENDING = "baseline-pending"; // marker in .wheelhouse/: init ran without a key, the plugin sends the baseline
@@ -105,13 +106,14 @@ const rel = (root, p) => {
 function loadConfig(root, flags = {}) {
   const file = readJson(path.join(root, CONFIG_FILE), {});
   // First that is set wins. Wheelhouse's own settings come first; the Claude Code plugin's options are a fallback.
-  const [url, urlFrom] = pick([flags.url, "--url"], [process.env.WHEELHOUSE_URL, "WHEELHOUSE_URL"], [file.url, CONFIG_FILE], [process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL, "plugin"]);
+  const user = readJson(USER_CONFIG, {});
+  const [url, urlFrom] = pick([flags.url, "--url"], [process.env.WHEELHOUSE_URL, "WHEELHOUSE_URL"], [file.url, CONFIG_FILE], [user.url, USER_CONFIG], [process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL, "plugin"]);
   const [key, keyFrom] = pick([flags.key, "--key"], [process.env.WHEELHOUSE_KEY, "WHEELHOUSE_KEY"], [() => url && loadKey(url), keyStoreName()], [process.env.CLAUDE_PLUGIN_OPTION_API_KEY, "plugin"]);
   if (file.project && !file.team) {
     console.error(`${CONFIG_FILE} uses the old \`project\` field. Wheelhouse now links a repo to a team: run \`wheelhouse init --team ${file.project}\` again.`);
     process.exit(1);
   }
-  const [team, teamFrom] = pick([flags.team, "--team"], [process.env.WHEELHOUSE_TEAM, "WHEELHOUSE_TEAM"], [file.team, CONFIG_FILE]);
+  const [team, teamFrom] = pick([flags.team, "--team"], [process.env.WHEELHOUSE_TEAM, "WHEELHOUSE_TEAM"], [file.team, CONFIG_FILE], [user.team, USER_CONFIG]);
   const defaultBranch = file.defaultBranch || detectDefaultBranch(root) || "main";
   return { url, key, team, defaultBranch, from: { url: urlFrom, key: keyFrom, team: teamFrom }, configured: !!(url && key && team) };
 }
@@ -149,6 +151,13 @@ function saveCredential(url, key) {
   } catch {
     /* best effort */
   }
+}
+
+/** Remember a default server and team for commands run outside a linked repo. `only` keeps what is already set. */
+function rememberDefault(values, { only = false } = {}) {
+  const cur = readJson(USER_CONFIG, {});
+  const next = only ? { ...values, ...cur } : { ...cur, ...values };
+  if (JSON.stringify(next) !== JSON.stringify(cur)) writeJson(USER_CONFIG, next);
 }
 
 function migrateOldCredentials() {
@@ -253,6 +262,7 @@ async function interactiveLogin(root, flags = {}) {
       const r = await checkKey(url, key);
       if (r.state === "ok") {
         saveCredential(url, key);
+        rememberDefault({ url });
         console.log(`✓ logged in to ${url}; key saved to ${keyStoreName()}`);
         return { url, key };
       }
@@ -596,6 +606,7 @@ async function cmdInit(flags) {
   }
   const defaultBranch = flags.branch || existing.defaultBranch || detectDefaultBranch(root) || "main";
   writeJson(path.join(root, CONFIG_FILE), { url, team, defaultBranch });
+  rememberDefault({ url, team }, { only: true });
   console.log(`✓ wrote ${CONFIG_FILE} (url ${url}, team ${team}, default branch ${defaultBranch})`);
 
   if (flags.key) {
@@ -761,6 +772,104 @@ async function cmdContext(flags) {
   process.stdout.write(r.markdown + "\n");
 }
 
+// ───────── board ─────────
+// The same REST tools as MCP (one write path). They work in any folder: the team comes from the ref, the repo, or ~/.wheelhouse.
+
+function boardConfig(flags, ref) {
+  const cfg = loadConfig(repoRoot(), flags);
+  if (ref && /^[A-Za-z]+-\d+$/.test(ref)) cfg.team = ref.split("-")[0].toUpperCase();
+  const fix = !cfg.url ? "run `wheelhouse login`, or pass --url" : !cfg.key ? `run \`wheelhouse login --url ${cfg.url}\`` : !cfg.team ? "pass --team KEY, or run inside a linked repo" : null;
+  if (fix) {
+    console.error(`${sym("fail", detectLevel({ stream: process.stderr }))} Not set up for the board: ${fix}.`);
+    process.exit(1);
+  }
+  return cfg;
+}
+
+function needRef(ref, usage) {
+  if (ref) return ref.toUpperCase();
+  console.error(`Usage: wheelhouse ${usage}`);
+  process.exit(1);
+}
+
+/** Run a board call; on failure print the server's message and exit 1, so scripts can rely on the exit code. */
+async function board(cfg, tool, args) {
+  try {
+    return await call(cfg, tool, args, 15000);
+  } catch (e) {
+    console.error(`${sym("fail", detectLevel({ stream: process.stderr }))} ${e.name === "AbortError" ? `${tool}: timed out` : e.message}`);
+    process.exit(1);
+  }
+}
+
+const issueRow = (i) => `${i.ref.padEnd(8)} ${String(i.status).padEnd(12)} ${String(i.priority ?? "").padEnd(7)} ${i.title}`;
+
+async function cmdIssues(flags) {
+  const cfg = boardConfig(flags);
+  const args = { limit: Number(flags.limit) || 50 };
+  if (flags.mine) args.assignee = "me";
+  for (const k of ["status", "cycle", "project", "label", "priority", "text"]) if (typeof flags[k] === "string") args[k] = flags[k];
+  const r = await board(cfg, "list_issues", args);
+  if (flags.json) return console.log(JSON.stringify(r, null, 2));
+  if (!r.issues.length) return console.log("No issues match.");
+  for (const i of r.issues) console.log(issueRow(i));
+  if (r.more) console.log(`… ${r.more} more (--limit, or narrow with --status, --cycle, --mine, --text)`);
+}
+
+async function cmdIssue(flags) {
+  const ref = needRef(flags._[0], "issue WH-12");
+  const r = await board(boardConfig(flags, ref), "get_issue", { ref, max_chars: 2000 });
+  if (flags.json) return console.log(JSON.stringify(r, null, 2));
+  const i = r.issue;
+  console.log(`${i.ref}  ${i.title}`);
+  console.log([i.status, i.priority, i.assignee && `@${i.assignee}`, i.cycle && `cycle ${i.cycle}`, i.project].filter(Boolean).join(" · "));
+  if (i.body) console.log(`\n${i.body}`);
+  for (const c of r.comments ?? []) console.log(`\n${c.by} · ${String(c.at).slice(0, 10)}\n${c.body}`);
+}
+
+/** Claim the issue, move it to In Progress, and switch to its branch when run in a git repo. */
+async function cmdStart(flags) {
+  const ref = needRef(flags._[0], "start WH-12");
+  const cfg = boardConfig(flags, ref);
+  const r = await board(cfg, "update_issue", { ref, status: "in_progress", assignee: "me" });
+  console.log(`${sym("ok")} ${ref} is In Progress and yours`);
+  const root = repoRoot();
+  if (flags["no-branch"] || !git(["rev-parse", "--git-dir"], { cwd: root })) return;
+  const slug = r.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40).replace(/-$/, "");
+  const name = `wh/${ref}-${slug}`;
+  const exists = git(["rev-parse", "--verify", "--quiet", name], { cwd: root });
+  try {
+    execFileSync("git", exists ? ["switch", name] : ["switch", "-c", name], { cwd: root, stdio: ["ignore", "ignore", "pipe"] });
+    console.log(`${sym("ok")} on branch ${name}${exists ? "" : " (new)"}`);
+  } catch (e) {
+    console.error(`${sym("warn")} could not switch to ${name}: ${String(e.stderr || e.message).trim()}`);
+  }
+}
+
+async function cmdDone(flags) {
+  const ref = needRef(flags._[0], "done WH-12");
+  await board(boardConfig(flags, ref), "update_issue", { ref, status: "review" });
+  console.log(`${sym("ok")} ${ref} is in review`);
+}
+
+async function cmdComment(flags) {
+  const [ref, ...words] = flags._;
+  const body = words.join(" ");
+  if (!body) needRef(null, 'comment WH-12 "what changed"');
+  await board(boardConfig(flags, ref), "comment", { ref: ref.toUpperCase(), body });
+  console.log(`${sym("ok")} commented on ${ref.toUpperCase()}`);
+}
+
+async function cmdNew(flags) {
+  const title = flags._.join(" ");
+  if (!title) needRef(null, 'new "title" [--body TEXT] [--priority P] [--status S] [--cycle current]');
+  const args = { title };
+  for (const k of ["body", "priority", "status", "cycle", "project"]) if (typeof flags[k] === "string") args[k] = flags[k];
+  const r = await board(boardConfig(flags), "create_issue", args);
+  if (flags.json) return console.log(JSON.stringify(r, null, 2));
+  console.log(`${sym("ok")} created ${r.ref}: ${r.title}`);
+}
+
 // ───────── integrations ─────────
 // Commands for one agent tool live under `wheelhouse integrations <name>`, so the top level stays about Wheelhouse.
 
@@ -915,6 +1024,7 @@ async function cmdLogin(flags) {
   if (flags.url && typeof flags.key === "string") {
     const url = flags.url.replace(/\/+$/, "");
     saveCredential(url, flags.key);
+    rememberDefault({ url });
     console.log(`✓ saved key for ${url} to ${keyStoreName()}`);
     return;
   }
@@ -941,6 +1051,12 @@ const HELP = `wheelhouse ${VERSION}: Shipstack Wheelhouse CLI
   init --team KEY [--url URL] [--key wh_...] link this repo, install git hooks, record baseline hashes
   login [--url URL]                             prompt (URL defaults to the hosted Wheelhouse) for an API key (hidden), check it, and save it. Scripts: login --url URL --key wh_...
   status                                        show config and server state
+  issues [--mine] [--status S] [--cycle current] [--text T] [--json]  list open issues, most urgent first
+  issue WH-12 [--json]                          an issue with its description and comments
+  start WH-12 [--no-branch]                     claim it, move it to In Progress, switch to branch wh/WH-12-<title>
+  done WH-12                                    move it to In Review
+  comment WH-12 "text"                          comment on it
+  new "title" [--body T] [--priority P] [--cycle current]  create an issue
   doctor [--json]                               check the server, key, repo link, git hooks, daemon and integrations; prints a fix for each problem
   whoami [--json]                               show the server, team and key in use, where each came from, and whether the key works
   context [ISSUE]                               print the team briefing (writes .wheelhouse/context.md) or an issue's context
@@ -974,6 +1090,18 @@ async function main() {
       return cmdWhoami(flags);
     case "doctor":
       return cmdDoctor(flags);
+    case "issues":
+      return cmdIssues(flags);
+    case "issue":
+      return cmdIssue(flags);
+    case "start":
+      return cmdStart(flags);
+    case "done":
+      return cmdDone(flags);
+    case "comment":
+      return cmdComment(flags);
+    case "new":
+      return cmdNew(flags);
     case "sync":
       return cmdSync(flags);
     case "--version":
