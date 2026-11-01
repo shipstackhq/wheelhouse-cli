@@ -20,11 +20,6 @@ const WORDMARK = [
   "█ █ █ █ █ █▀▀ █▀▀ █   █ █ █▀█ █ █ █▀▀ █▀▀",
   "▀▄▀▄▀ █▀█ ██▄ ██▄ █▄▄ █▀█ █▄█ █▄█ ▄██ ██▄",
 ];
-// The wake under it: a dithered fade in, full in the middle, and out.
-const wake = (width) => {
-  const shades = "░▒▓█";
-  return Array.from({ length: width }, (_, i) => shades[Math.min(3, Math.floor((1 - Math.abs((2 * i) / (width - 1) - 1)) * 4))]).join("");
-};
 
 const FROM = [45, 212, 191]; // teal
 const TO = [59, 130, 246]; // blue
@@ -40,7 +35,7 @@ function paint(line, level) {
 }
 
 /**
- * The header: the wordmark and its wake in a double frame, and below it who makes it (left) and the version (right). One line when the terminal
+ * The header: the wordmark in a double frame, and below it who makes it (left) and the version (right). One line when the terminal
  * is narrower than the frame. The frame's ╔═╗║╚╝ are in code page 437, so it looks the same on every terminal.
  */
 export function header({ version, channel, level = detectLevel(), columns = process.stdout.columns ?? 80 } = {}) {
@@ -55,7 +50,6 @@ export function header({ version, channel, level = detectLevel(), columns = proc
     dim(`╔${"═".repeat(inner)}╗`),
     row(" ".repeat(width)),
     ...WORDMARK.map((line) => row(paint(line, level))),
-    row(paint(wake(width), level)),
     row(" ".repeat(width)),
     dim(`╚${"═".repeat(inner)}╝`),
     dim(`by shipstack.run${tag.padStart(inner + 2 - "by shipstack.run".length)}`),
