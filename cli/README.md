@@ -32,7 +32,7 @@ wheelhouse integrations [NAME COMMAND]                   list agent integrations
 
 ## Configuration
 
-`wheelhouse.json` at the repo root holds `url`, `team` and `defaultBranch`. Commit it.
+`wheelhouse.json` at the repo root holds `url`, `team` and `defaultBranch`. It is personal and gitignored; each teammate runs setup once.
 
 Each setting comes from the first of these that is set (`wheelhouse whoami` shows which one won):
 
