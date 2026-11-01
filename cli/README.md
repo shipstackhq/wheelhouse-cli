@@ -14,11 +14,12 @@ It has no dependencies and runs on Node 18+ with git.
 wheelhouse init --team KEY [--url URL] [--key wh_...] link this repo, install git hooks, record baseline hashes
 wheelhouse login [--url URL]                             prompt (URL defaults to https://wheelhouse.shipstack.run) for an API key (hidden), check it, store it (scripts: --url URL --key wh_...)
 wheelhouse status                                        config and server state
+wheelhouse doctor                                        check the server, key, repo link, git hooks, daemon and integrations; a fix for each problem
 wheelhouse whoami                                        the server, team and key in use, where each came from, and whether the key works
 wheelhouse context [ISSUE]                               print the team briefing (and write .wheelhouse/context.md) or an issue's context
 wheelhouse sync                                          report working-copy changes as a session (for workflows without Claude Code)
 wheelhouse land [--baseline|--flush] [--from REF --to REF]  report what landed on the default branch. Git hooks only queue it locally; --flush sends the queue
-wheelhouse integrations [NAME COMMAND]                   list agent integrations (✓ installed), or run one: `integrations claude-code hook <event>` is what the plugin calls
+wheelhouse integrations [NAME COMMAND]                   list agent integrations (✓ installed), or run one: `integrations claude-code hook <event>` is what the plugin calls; `integrations claude-code install` sets the plugin up
 ```
 
 ## Configuration

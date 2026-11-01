@@ -772,13 +772,30 @@ async function cmdContext(flags) {
 // ───────── integrations ─────────
 // Commands for one agent tool live under `wheelhouse integrations <name>`, so the top level stays about Wheelhouse.
 
+const claudePlugins = (file) => readJson(path.join(os.homedir(), ".claude", "plugins", file), {});
+
 const INTEGRATIONS = {
   "claude-code": {
     about: "Claude Code plugin: hooks keep the board and map in sync with each session",
-    installed: () => Object.keys(readJson(path.join(os.homedir(), ".claude", "plugins", "installed_plugins.json"), {}).plugins || {}).some((k) => k.startsWith("wheelhouse@")),
-    commands: { hook: ([event]) => runHook(event) },
+    installed: () => Object.keys(claudePlugins("installed_plugins.json").plugins || {}).some((k) => k.startsWith("wheelhouse@")),
+    fix: "wheelhouse integrations claude-code install",
+    commands: { hook: ([event]) => runHook(event), install: (_, flags) => installClaudeCode(flags) },
   },
 };
+
+/** Add the Shipstack marketplace and install the plugin through the `claude` CLI. The key is set in Claude Code, so it never shows in a process list. */
+function installClaudeCode(flags) {
+  const claude = (args) => spawnSync("claude", args, { stdio: "inherit" });
+  if (spawnSync("claude", ["--version"], { stdio: "ignore" }).error) {
+    console.error("Claude Code is not installed (no `claude` command). Install it first: https://claude.com/claude-code");
+    process.exit(1);
+  }
+  if (INTEGRATIONS["claude-code"].installed()) return console.log("✓ the Wheelhouse plugin is already installed in Claude Code");
+  if (!claudePlugins("known_marketplaces.json").shipstack && claude(["plugin", "marketplace", "add", String(flags.from || "shipstackhq/wheelhouse-cli")]).status !== 0) process.exit(1);
+  const url = loadConfig(process.cwd(), flags).url || DEFAULT_URL;
+  if (claude(["plugin", "install", "wheelhouse@shipstack", "--config", `server_url=${url}`]).status !== 0) process.exit(1);
+  console.log(`✓ installed the Wheelhouse plugin for ${url}.\nLast step: run \`claude\`, then /plugin configure wheelhouse@shipstack and paste your API key.`);
+}
 
 async function cmdIntegrations(flags) {
   const [name, sub, ...args] = flags._;
@@ -796,7 +813,54 @@ async function cmdIntegrations(flags) {
     console.error(`Usage: wheelhouse integrations ${name} <${Object.keys(it.commands).join(" | ")}>`);
     process.exit(1);
   }
-  return run(args);
+  return run(args, flags);
+}
+
+// ───────── doctor ─────────
+
+async function cmdDoctor(flags) {
+  let root = null;
+  try {
+    root = repoRoot();
+  } catch {
+    /* not in a repo */
+  }
+  const cfg = loadConfig(root || process.cwd(), flags);
+  let failed = 0;
+  // ✓ fine, ✗ broken (with the fix), · optional and not set up.
+  const line = (state, what, fix) => {
+    if (state === "✗") failed++;
+    console.log(`${state} ${what}${fix ? `\n    → ${fix}` : ""}`);
+  };
+
+  if (!cfg.url) line("✗", "server: not set", "run inside a linked repo, pass --url, or `wheelhouse init --team KEY`");
+  else if (!cfg.key) line("✗", `key: none for ${cfg.url}`, `wheelhouse login --url ${cfg.url}`);
+  else {
+    const r = await checkKey(cfg.url, cfg.key);
+    if (r.state === "ok") line("✓", `server ${cfg.url} accepts the key (${cfg.from.key})`);
+    else if (r.state === "rejected") line("✗", `server ${cfg.url} rejects the key (${cfg.from.key})`, `wheelhouse login --url ${cfg.url}`);
+    else line("✗", `server ${cfg.url} unreachable (${r.message})`, "check the URL, and that the server is running");
+  }
+
+  if (!root) line("·", "repo: not in a git repository");
+  else if (!cfg.team) line("✗", `repo: ${root} is not linked to a team`, "wheelhouse init --team KEY");
+  else {
+    line("✓", `repo linked to team ${cfg.team} (${cfg.from.team})`);
+    const hooksDir = git(["rev-parse", "--git-path", "hooks"], { cwd: root });
+    const hook = hooksDir && path.resolve(root, hooksDir, "post-commit");
+    const ok = hook && fs.existsSync(hook) && fs.readFileSync(hook, "utf8").includes("# >>> wheelhouse");
+    line(ok ? "✓" : "✗", `git hooks ${ok ? "installed" : "missing"}`, ok ? "" : "wheelhouse init (installs them again)");
+  }
+
+  const daemon = readJson(path.join(HOME_DIR, "daemon", "config.json"), {});
+  if (!daemon.deviceId) line("·", "daemon: not paired (only needed to run agents on this machine)", "wheelhouse-daemon pair --server <url>");
+  else {
+    const running = process.platform !== "darwin" || spawnSync("launchctl", ["print", `gui/${process.getuid()}/com.shipstack.wheelhouse-daemon`], { stdio: "ignore" }).status === 0;
+    line(running ? "✓" : "✗", `daemon paired with ${daemon.server} as ${daemon.name}${running ? "" : ", but not running"}`, running ? "" : "wheelhouse-daemon run, or install it as a service");
+  }
+
+  for (const [name, it] of Object.entries(INTEGRATIONS)) line(it.installed() ? "✓" : "·", `integration ${name}: ${it.installed() ? "installed" : "not installed"}`, it.installed() ? "" : it.fix);
+  if (failed) process.exit(1);
 }
 
 async function cmdWhoami(flags) {
@@ -807,6 +871,7 @@ async function cmdWhoami(flags) {
     /* not in a repo: no wheelhouse.json */
   }
   const cfg = loadConfig(root, flags);
+  if (!cfg.url) return console.log("No server here: run this in a repo linked with `wheelhouse init`, or pass --url.");
   const from = (k) => (cfg.from[k] ? `  (${cfg.from[k]})` : "");
   console.log(`server:   ${cfg.url || "(not set)"}${from("url")}`);
   console.log(`team:     ${cfg.team || "(not set)"}${from("team")}`);
@@ -882,11 +947,12 @@ const HELP = `wheelhouse ${VERSION}: Shipstack Wheelhouse CLI
   init --team KEY [--url URL] [--key wh_...] link this repo, install git hooks, record baseline hashes
   login [--url URL]                             prompt (URL defaults to the hosted Wheelhouse) for an API key (hidden), check it, and save it. Scripts: login --url URL --key wh_...
   status                                        show config and server state
+  doctor                                        check the server, key, repo link, git hooks, daemon and integrations; prints a fix for each problem
   whoami                                        show the server, team and key in use, where each came from, and whether the key works
   context [ISSUE]                               print the team briefing (writes .wheelhouse/context.md) or an issue's context
   sync                                          report working-copy changes as a session (for non-Claude Code workflows)
   land [--baseline|--flush] [--from REF --to REF]  report what landed on the default branch. Git hooks only queue it; --flush sends the queue
-  integrations [NAME COMMAND]                   list agent integrations, or run one's command: claude-code hook <session-start | post-edit | pre-bash | post-bash | pre-mcp | prompt | stop | session-end>
+  integrations [NAME COMMAND]                   list agent integrations, or run one's command: claude-code install [--from SOURCE] | claude-code hook <session-start | post-edit | pre-bash | post-bash | pre-mcp | prompt | stop | session-end>
 
 Config: ${CONFIG_FILE} (url, team, defaultBranch; commit it). Key: WHEELHOUSE_KEY, then 'wheelhouse login' (macOS Keychain, else ~/.wheelhouse/credentials.json), then the plugin's api_key option.
 `;
@@ -911,6 +977,8 @@ async function main() {
       return cmdStatus(flags);
     case "whoami":
       return cmdWhoami(flags);
+    case "doctor":
+      return cmdDoctor(flags);
     case "sync":
       return cmdSync(flags);
     case "--version":
