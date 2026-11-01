@@ -16,7 +16,7 @@ import { keychainGet, keychainSet } from "../lib/keychain.mjs";
 import { detectLevel, header, sym } from "../lib/ui.mjs";
 
 const VERSION = "0.2.0";
-const CONFIG_FILE = "wheelhouse.json"; // committed: { url, team, defaultBranch }
+const CONFIG_FILE = "wheelhouse.json"; // per person, gitignored: { url, team, defaultBranch }
 const STATE_DIR = ".wheelhouse"; // gitignored: context.md, sessions/, hook.log
 const HOME_DIR = path.join(os.homedir(), ".wheelhouse"); // per user: credentials (off macOS), daemon/
 const CRED_FILE = path.join(HOME_DIR, "credentials.json");
@@ -616,10 +616,12 @@ async function cmdInit(flags) {
 
   // .gitignore
   const gi = path.join(root, ".gitignore");
-  const cur = fs.existsSync(gi) ? fs.readFileSync(gi, "utf8") : "";
-  if (!cur.split("\n").some((l) => l.trim() === `${STATE_DIR}/` || l.trim() === STATE_DIR)) {
-    fs.writeFileSync(gi, cur + (cur.endsWith("\n") || !cur ? "" : "\n") + `${STATE_DIR}/\n`);
-    console.log(`✓ added ${STATE_DIR}/ to .gitignore`);
+  for (const entry of [`${STATE_DIR}/`, CONFIG_FILE]) {
+    const cur = fs.existsSync(gi) ? fs.readFileSync(gi, "utf8") : "";
+    if (!cur.split("\n").some((l) => l.trim() === entry || l.trim() === entry.replace(/\/$/, ""))) {
+      fs.writeFileSync(gi, cur + (cur.endsWith("\n") || !cur ? "" : "\n") + `${entry}\n`);
+      console.log(`✓ added ${entry} to .gitignore`);
+    }
   }
 
   if (!flags["no-git-hooks"]) installGitHooks(root);

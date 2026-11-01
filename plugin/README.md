@@ -38,7 +38,7 @@ Then, in each repository:
 /wheelhouse:setup WH
 ```
 
-This writes `wheelhouse.json` (commit it), adds `.wheelhouse/` to `.gitignore`, installs git hooks, and records baseline content hashes.
+This writes `wheelhouse.json` (personal, not committed), adds it and `.wheelhouse/` to `.gitignore`, installs git hooks, and records baseline content hashes.
 
 You don't need a second key. Git hooks run outside Claude Code and can't read the plugin's stored key, so they only queue what landed (in `.wheelhouse/outbox`); the plugin sends the queue, and the one-time baseline, at the next session start and turn end. If you also commit outside Claude sessions and want those reported immediately, run `npx @shipstack/wheelhouse-cli login` once (it asks for the URL, press Enter for `https://wheelhouse.shipstack.run`, and your key, typed hidden). For scripts, `login --url <url> --key wh_...` still works.
 
