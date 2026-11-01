@@ -44,7 +44,7 @@ test("fails open: no session id or no usable input means no output and exit 0", 
   }
 });
 
-test("the plugin's hooks.json wires it to the Wheelhouse MCP tools and the copy is in sync", () => {
+test("the plugin's hooks.json wires it to the Wheelhouse MCP tools", () => {
   const hooks = JSON.parse(fs.readFileSync(path.join(path.dirname(script), "..", "..", "plugin", "hooks", "hooks.json"), "utf8"));
   const entry = hooks.hooks.PreToolUse.find((e) => e.hooks.some((h) => h.command.endsWith("hook pre-mcp")));
   assert.ok(entry, "pre-mcp hook registered");

@@ -36,11 +36,10 @@ See [cli/README.md](cli/README.md) for the full command list.
 
 ## Development
 
-The plugin bundles a copy of the CLI script, so it works without `npm install`. After changing `cli/bin/wheelhouse.mjs`:
+The plugin calls the installed `wheelhouse` CLI (`npm i -g @shipstack/wheelhouse-cli`, or `npm link` in `cli/` while developing). After changing `cli/bin/wheelhouse.mjs`:
 
 ```
-npm run sync-plugin   # copy the CLI into plugin/scripts/
-npm run check         # verify the copy and validate the plugin
+npm run check         # test the CLI and validate the plugin
 ```
 
 Release the CLI and the plugin together: bump `cli/package.json` and `plugin/.claude-plugin/plugin.json` to the same version. Installed plugins only update when the version changes.

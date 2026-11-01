@@ -50,4 +50,4 @@ Commits are also picked up at the next Claude session start or turn end on the d
 - Every hook fails open: if Wheelhouse is unreachable, Claude's work continues and the error is logged to `.wheelhouse/hook.log`.
 - Only file paths and git blob hashes are sent, never file contents. Ticket comments and map explanations are written by Claude through the MCP tools.
 
-`scripts/wheelhouse.mjs` is a copy of the CLI in `../cli/`. Update it with `npm run sync-plugin` at the repo root.
+Hooks call the installed `wheelhouse` CLI (`npm i -g @shipstack/wheelhouse-cli`) through `scripts/wheelhouse.sh`; the plugin keeps no copy of it.
