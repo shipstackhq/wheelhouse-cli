@@ -14,6 +14,7 @@ import { DEFAULT_CONFIG, loadConfig, paths, saveConfig } from "./config.mjs";
 import { exportPrivateKey, generateKeyPair } from "./crypto.mjs";
 import { log, runDaemon, VERSION } from "./daemon.mjs";
 import { deleteKey, loadKey, storeKey } from "./keystore.mjs";
+import { detectLevel, header } from "./ui.mjs";
 
 function args(argv) {
   const out = { _: [] };
@@ -128,9 +129,11 @@ async function main() {
     // uninstall script) remove the service first, so they are not restarted.
     process.exit(unpaired ? 0 : signalled === "SIGINT" ? 130 : signalled === "SIGTERM" ? 143 : 1);
   }
-  if (cmd === "--version" || cmd === "version") return console.log(VERSION);
+  // Scripts reading the version get the bare number; a person in a terminal gets the header.
+  if (cmd === "version" || o.version) return console.log(detectLevel() === "plain" ? VERSION : header({ version: VERSION }));
+  if (!cmd || cmd === "help" || o.help) console.log(header({ version: VERSION }));
   console.log("usage: wheelhouse-daemon pair --server <url> [--name NAME] | run | status | unpair");
-  process.exitCode = cmd ? 2 : 0;
+  process.exitCode = cmd && cmd !== "help" ? 2 : 0;
 }
 
 main().catch((e) => {
