@@ -1,22 +1,27 @@
 #!/usr/bin/env node
 // wheelhouse: CLI + Claude Code hook runner for Shipstack Wheelhouse.
 //
-// Zero dependencies (Node >= 18). The Claude Code plugin bundles this file, so
-// it must stay self-contained. Content hashes are git blob ids (`git hash-object`),
+// Zero dependencies (Node >= 18); ../lib holds what it shares with the daemon
+// (terminal look, Keychain). Content hashes are git blob ids (`git hash-object`),
 // which match committed blobs exactly.
 //
 // Every hook fails OPEN: if Wheelhouse is unreachable or anything throws, the
 // agent's work continues and the error is logged to .wheelhouse/hook.log.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { keychainGet, keychainSet } from "../lib/keychain.mjs";
+import { detectLevel, header, sym } from "../lib/ui.mjs";
 
-const VERSION = "0.1.4";
-const CONFIG_FILE = "wheelhouse.json"; // committed: { url, project, defaultBranch }
+const VERSION = "0.2.0";
+const CONFIG_FILE = "wheelhouse.json"; // committed: { url, team, defaultBranch }
 const STATE_DIR = ".wheelhouse"; // gitignored: context.md, sessions/, hook.log
-const CRED_FILE = path.join(os.homedir(), ".config", "wheelhouse", "credentials.json");
+const HOME_DIR = path.join(os.homedir(), ".wheelhouse"); // per user: credentials (off macOS), daemon/
+const CRED_FILE = path.join(HOME_DIR, "credentials.json");
+const USER_CONFIG = path.join(HOME_DIR, "config.json"); // default { url, team } for commands run outside a linked repo
+const OLD_CRED_FILE = path.join(os.homedir(), ".config", "wheelhouse", "credentials.json"); // before 0.2.0
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const BASELINE_PENDING = "baseline-pending"; // marker in .wheelhouse/: init ran without a key, the plugin sends the baseline
 const QUEUE_DIGEST = 10; // changes injected per prompt; the rest stay queued for get_changes
@@ -100,12 +105,65 @@ const rel = (root, p) => {
 
 function loadConfig(root, flags = {}) {
   const file = readJson(path.join(root, CONFIG_FILE), {});
-  const url = (flags.url || process.env.WHEELHOUSE_URL || process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL || file.url || "").replace(/\/+$/, "");
-  const creds = readJson(CRED_FILE, {});
-  const key = flags.key || process.env.WHEELHOUSE_KEY || process.env.CLAUDE_PLUGIN_OPTION_API_KEY || (url && creds[url]) || "";
-  const project = flags.project || process.env.WHEELHOUSE_PROJECT || file.project || "";
+  // First that is set wins. Wheelhouse's own settings come first; the Claude Code plugin's options are a fallback.
+  const user = readJson(USER_CONFIG, {});
+  const [url, urlFrom] = pick([flags.url, "--url"], [process.env.WHEELHOUSE_URL, "WHEELHOUSE_URL"], [file.url, CONFIG_FILE], [user.url, USER_CONFIG], [process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL, "plugin"]);
+  const [key, keyFrom] = pick([flags.key, "--key"], [process.env.WHEELHOUSE_KEY, "WHEELHOUSE_KEY"], [() => url && loadKey(url), keyStoreName()], [process.env.CLAUDE_PLUGIN_OPTION_API_KEY, "plugin"]);
+  if (file.project && !file.team) {
+    console.error(`${CONFIG_FILE} uses the old \`project\` field. Wheelhouse now links a repo to a team: run \`wheelhouse init --team ${file.project}\` again.`);
+    process.exit(1);
+  }
+  const [team, teamFrom] = pick([flags.team, "--team"], [process.env.WHEELHOUSE_TEAM, "WHEELHOUSE_TEAM"], [file.team, CONFIG_FILE], [user.team, USER_CONFIG]);
   const defaultBranch = file.defaultBranch || detectDefaultBranch(root) || "main";
-  return { url, key, project, defaultBranch, configured: !!(url && key && project) };
+  return { url, key, team, defaultBranch, from: { url: urlFrom, key: keyFrom, team: teamFrom }, configured: !!(url && key && team) };
+}
+
+/** The first source that is set, as [value, where it came from]. A function is only called when reached. */
+function pick(...sources) {
+  for (const [v, from] of sources) {
+    const value = typeof v === "function" ? v() : v;
+    if (typeof value === "string" && value) return [value.replace(/\/+$/, ""), from];
+  }
+  return ["", null];
+}
+
+// ───────── keys ─────────
+// macOS: the login Keychain, one item per server URL. Elsewhere (and with WHEELHOUSE_KEYSTORE=file, which tests use):
+// ~/.wheelhouse/credentials.json, readable only by this user. Keys saved before 0.2.0 move over on first use.
+
+const KEYCHAIN_SERVICE = "com.shipstack.wheelhouse";
+const useKeychain = () => (process.env.WHEELHOUSE_KEYSTORE || (process.platform === "darwin" ? "keychain" : "file")) === "keychain";
+const keyStoreName = () => (useKeychain() ? "Keychain" : CRED_FILE);
+
+function loadKey(url) {
+  migrateOldCredentials();
+  return (useKeychain() ? keychainGet(KEYCHAIN_SERVICE, url) : readJson(CRED_FILE, {})[url]) || "";
+}
+
+/** Save a key for a server; chmod too, because the mode on writeFile only applies when the file is created. */
+function saveCredential(url, key) {
+  if (useKeychain()) return keychainSet(KEYCHAIN_SERVICE, url, `Wheelhouse (${url})`, key);
+  const creds = readJson(CRED_FILE, {});
+  creds[url] = key;
+  writeJson(CRED_FILE, creds, 0o600);
+  try {
+    fs.chmodSync(CRED_FILE, 0o600);
+  } catch {
+    /* best effort */
+  }
+}
+
+/** Remember a default server and team for commands run outside a linked repo. `only` keeps what is already set. */
+function rememberDefault(values, { only = false } = {}) {
+  const cur = readJson(USER_CONFIG, {});
+  const next = only ? { ...values, ...cur } : { ...cur, ...values };
+  if (JSON.stringify(next) !== JSON.stringify(cur)) writeJson(USER_CONFIG, next);
+}
+
+function migrateOldCredentials() {
+  if (!fs.existsSync(OLD_CRED_FILE)) return;
+  for (const [url, key] of Object.entries(readJson(OLD_CRED_FILE, {}))) saveCredential(url, key);
+  fs.rmSync(OLD_CRED_FILE);
 }
 
 function detectDefaultBranch(root) {
@@ -122,10 +180,13 @@ async function call(cfg, tool, args, timeoutMs = 4000) {
     const res = await fetch(`${cfg.url}/api/v1/${tool}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${cfg.key}`, "Content-Type": "application/json", "User-Agent": `wheelhouse-cli/${VERSION}` },
-      body: JSON.stringify({ project: cfg.project, ...args }),
+      body: JSON.stringify({ ...(cfg.team ? { team: cfg.team } : {}), ...args }),
       signal: ctl.signal,
     });
     const body = await res.json().catch(() => ({}));
+    if (res.status === 404 && /Unknown tool/.test(body?.error?.message ?? "")) {
+      throw Object.assign(new Error(`${tool}: the server does not know this tool. Update the Wheelhouse CLI/plugin (or the server) so they match.`), { status: 404 });
+    }
     if (!res.ok) throw Object.assign(new Error(`${tool}: ${res.status} ${body?.error?.message ?? ""}`.trim()), { status: res.status });
     return body.data;
   } finally {
@@ -140,17 +201,6 @@ const LOGIN_TRIES = 3;
 
 const canPrompt = () => !!(process.stdin.isTTY && process.stdout.isTTY) && !process.env.CI;
 
-/** Save a key for a server; chmod too, because the mode on writeFile only applies when the file is created. */
-function saveCredential(url, key) {
-  const creds = readJson(CRED_FILE, {});
-  creds[url] = key;
-  writeJson(CRED_FILE, creds, 0o600);
-  try {
-    fs.chmodSync(CRED_FILE, 0o600);
-  } catch {
-    /* best effort */
-  }
-}
 
 /** Read one line from the terminal. With `hidden`, nothing is echoed (not even asterisks), so the key never reaches the screen or scrollback. */
 function prompt(question, { hidden = false, fallback = "" } = {}) {
@@ -189,7 +239,7 @@ function prompt(question, { hidden = false, fallback = "" } = {}) {
 /** Ask the server whether a key works. Returns "ok", "rejected" (401/403) or "unreachable". */
 async function checkKey(url, key) {
   try {
-    await call({ url, key, project: "" }, "list_projects", {}, 8000);
+    await call({ url, key }, "get_briefing", {}, 8000);
     return { state: "ok" };
   } catch (e) {
     if (e.status === 401 || e.status === 403) return { state: "rejected" };
@@ -212,7 +262,8 @@ async function interactiveLogin(root, flags = {}) {
       const r = await checkKey(url, key);
       if (r.state === "ok") {
         saveCredential(url, key);
-        console.log(`✓ logged in to ${url}; key saved to ${CRED_FILE}`);
+        rememberDefault({ url });
+        console.log(`✓ logged in to ${url}; key saved to ${keyStoreName()}`);
         return { url, key };
       }
       if (r.state === "unreachable") {
@@ -410,7 +461,7 @@ const hooks = {
     return {
       hookSpecificOutput: {
         hookEventName: "SessionStart",
-        additionalContext: `${gone ? removalNotice(gone) + "\n\n" : ""}${b.markdown}\n\n(Wheelhouse project ${cfg.project}. This briefing is also saved at ${STATE_DIR}/context.md. Before working a ticket call get_ticket_context. The board and map are kept in sync by hooks: changed files are tracked automatically, and before you finish a turn you'll be asked to update the ticket and map if needed.)`,
+        additionalContext: `${gone ? removalNotice(gone) + "\n\n" : ""}${b.markdown}\n\n(Wheelhouse team ${cfg.team}: pass team "${cfg.team}" on every Wheelhouse tool call. This briefing is also saved at ${STATE_DIR}/context.md. Before working an issue call get_issue. The board and map are kept in sync by hooks: changed files are tracked automatically, and before you finish a turn you'll be asked to update the issue and map if needed.)`,
       },
     };
   },
@@ -482,11 +533,11 @@ const hooks = {
         const shown = q.changes;
         const lines = shown.map((c) => `- ${c.actorName} ${c.summary}`).join("\n");
         const more = q.total - shown.length;
-        context = `${context ? context + "\n\n" : ""}Wheelhouse: ${q.total} new change(s) from the team in ${cfg.project} since you last checked:\n${lines}${
-          more > 0 ? `\n…and ${more} more. Call get_changes to see them, then ack_changes.` : ""
+        context = `${context ? context + "\n\n" : ""}Wheelhouse: ${q.total} new change(s) from the team in ${cfg.team} since you last checked:\n${lines}${
+          more > 0 ? `\n…and ${more} more. Call get_changes to see them.` : ""
         }\nHandle anything addressed to you (these are already marked seen for this session).`;
         const last = shown.at(-1)?.seq;
-        if (last) await call(cfg, "ack_changes", { seq: last, session: id }, 3000).catch((e) => log(root, `prompt ack: ${e.message}`));
+        if (last) await call(cfg, "get_changes", { ack: last, limit: 1, session: id }, 3000).catch((e) => log(root, `prompt ack: ${e.message}`));
       }
     }
     saveSession(root, id, s);
@@ -513,7 +564,7 @@ const hooks = {
     saveSession(root, id, s);
     if (s.blocks[key] > 2) {
       // Don't trap the agent: after two reminders, let the turn end and tell the human.
-      return { systemMessage: `Wheelhouse: this session still has unsynced work in ${cfg.project} (see the ticket/map). It will be flagged on the board.` };
+      return { systemMessage: `Wheelhouse: this session still has unsynced work in ${cfg.team} (see the issue/map). It will be flagged on the board.` };
     }
     return { decision: "block", reason: status.message };
   },
@@ -548,18 +599,19 @@ async function cmdInit(flags) {
   const root = repoRoot();
   const existing = readJson(path.join(root, CONFIG_FILE), {});
   const url = (flags.url || existing.url || process.env.WHEELHOUSE_URL || DEFAULT_URL).replace(/\/+$/, "");
-  const project = (flags.project || existing.project || "").toUpperCase();
-  if (!project) {
-    console.error(`Usage: wheelhouse init --project <KEY> [--url <https://wheelhouse.example>] [--key wh_...] [--no-git-hooks] [--no-baseline]\nThe URL defaults to ${DEFAULT_URL}.`);
+  const team = (flags.team || existing.team || "").toUpperCase();
+  if (!team) {
+    console.error(`Usage: wheelhouse init --team <KEY> [--url <https://wheelhouse.example>] [--key wh_...] [--no-git-hooks] [--no-baseline]\nThe URL defaults to ${DEFAULT_URL}.`);
     process.exit(1);
   }
   const defaultBranch = flags.branch || existing.defaultBranch || detectDefaultBranch(root) || "main";
-  writeJson(path.join(root, CONFIG_FILE), { url, project, defaultBranch });
-  console.log(`✓ wrote ${CONFIG_FILE} (url ${url}, project ${project}, default branch ${defaultBranch})`);
+  writeJson(path.join(root, CONFIG_FILE), { url, team, defaultBranch });
+  rememberDefault({ url, team }, { only: true });
+  console.log(`✓ wrote ${CONFIG_FILE} (url ${url}, team ${team}, default branch ${defaultBranch})`);
 
   if (flags.key) {
     saveCredential(url, String(flags.key));
-    console.log(`✓ saved API key for ${url} to ${CRED_FILE}`);
+    console.log(`✓ saved API key for ${url} to ${keyStoreName()}`);
   }
 
   // .gitignore
@@ -594,9 +646,9 @@ async function cmdInit(flags) {
     return;
   }
   try {
-    const projects = await call(cfg, "list_projects", {});
-    if (!projects.some((p) => p.key === project)) console.log(`! project ${project} not found on ${url}; create it in the web app.`);
-    else console.log(`✓ connected to ${url} as an agent key; project ${project} found`);
+    const { teams } = await call({ ...cfg, team: "" }, "get_briefing", {});
+    if (!teams.some((t) => t.key === team)) console.log(`! team ${team} not found on ${url}; create it in the web app.`);
+    else console.log(`✓ connected to ${url} as an agent key; team ${team} found`);
   } catch (e) {
     console.log(`! could not reach Wheelhouse: ${e.message}`);
     return;
@@ -650,7 +702,7 @@ async function cmdLand(flags) {
   const cfg = loadConfig(root, flags);
   const hook = !!flags["git-hook"];
   // Queueing needs only the link (wheelhouse.json), not a key: a git hook must work for someone who set up the plugin only.
-  if (!cfg.url || !cfg.project) {
+  if (!cfg.url || !cfg.team) {
     if (!hook) console.error("wheelhouse is not configured here (run `wheelhouse init`).");
     return;
   }
@@ -708,14 +760,264 @@ async function cmdContext(flags) {
   const root = repoRoot();
   const cfg = loadConfig(root, flags);
   if (!cfg.configured) return console.error("wheelhouse is not configured here (run `wheelhouse init`).");
-  const ticket = flags.ticket ?? flags._[1];
-  const r = ticket ? await call(cfg, "get_ticket_context", { ticket }, 8000) : await call(cfg, "get_briefing", {}, 8000);
-  if (!ticket) {
-    fs.mkdirSync(path.join(root, STATE_DIR), { recursive: true });
-    fs.writeFileSync(path.join(root, STATE_DIR, "context.md"), r.markdown + "\n");
+  const ref = flags.issue ?? flags._[1];
+  if (ref) {
+    const r = await call(cfg, "get_issue", { ref }, 8000);
+    const files = r.readFirst?.length ? `Read first: ${r.readFirst.join(", ")}\n\n` : "";
+    return process.stdout.write(`${r.issue.ref} ${r.issue.title}\n\n${files}${r.context}\n`);
   }
+  const r = await call(cfg, "get_briefing", {}, 8000);
+  fs.mkdirSync(path.join(root, STATE_DIR), { recursive: true });
+  fs.writeFileSync(path.join(root, STATE_DIR, "context.md"), r.markdown + "\n");
   process.stdout.write(r.markdown + "\n");
 }
+
+// ───────── board ─────────
+// The same REST tools as MCP (one write path). They work in any folder: the team comes from the ref, the repo, or ~/.wheelhouse.
+
+function boardConfig(flags, ref) {
+  const cfg = loadConfig(repoRoot(), flags);
+  if (ref && /^[A-Za-z]+-\d+$/.test(ref)) cfg.team = ref.split("-")[0].toUpperCase();
+  const fix = !cfg.url ? "run `wheelhouse login`, or pass --url" : !cfg.key ? `run \`wheelhouse login --url ${cfg.url}\`` : !cfg.team ? "pass --team KEY, or run inside a linked repo" : null;
+  if (fix) {
+    console.error(`${sym("fail", detectLevel({ stream: process.stderr }))} Not set up for the board: ${fix}.`);
+    process.exit(1);
+  }
+  return cfg;
+}
+
+function needRef(ref, usage) {
+  if (ref) return ref.toUpperCase();
+  console.error(`Usage: wheelhouse ${usage}`);
+  process.exit(1);
+}
+
+/** Run a board call; on failure print the server's message and exit 1, so scripts can rely on the exit code. */
+async function board(cfg, tool, args) {
+  try {
+    return await call(cfg, tool, args, 15000);
+  } catch (e) {
+    console.error(`${sym("fail", detectLevel({ stream: process.stderr }))} ${e.name === "AbortError" ? `${tool}: timed out` : e.message}`);
+    process.exit(1);
+  }
+}
+
+const issueRow = (i) => `${i.ref.padEnd(8)} ${String(i.status).padEnd(12)} ${String(i.priority ?? "").padEnd(7)} ${i.title}`;
+
+async function cmdIssues(flags) {
+  const cfg = boardConfig(flags);
+  const args = { limit: Number(flags.limit) || 50 };
+  if (flags.mine) args.assignee = "me";
+  for (const k of ["status", "cycle", "project", "label", "priority", "text"]) if (typeof flags[k] === "string") args[k] = flags[k];
+  const r = await board(cfg, "list_issues", args);
+  if (flags.json) return console.log(JSON.stringify(r, null, 2));
+  if (!r.issues.length) return console.log("No issues match.");
+  for (const i of r.issues) console.log(issueRow(i));
+  if (r.more) console.log(`… ${r.more} more (--limit, or narrow with --status, --cycle, --mine, --text)`);
+}
+
+async function cmdIssue(flags) {
+  const ref = needRef(flags._[0], "issue WH-12");
+  const r = await board(boardConfig(flags, ref), "get_issue", { ref, max_chars: 2000 });
+  if (flags.json) return console.log(JSON.stringify(r, null, 2));
+  const i = r.issue;
+  console.log(`${i.ref}  ${i.title}`);
+  console.log([i.status, i.priority, i.assignee && `@${i.assignee}`, i.cycle && `cycle ${i.cycle}`, i.project].filter(Boolean).join(" · "));
+  if (i.body) console.log(`\n${i.body}`);
+  for (const c of r.comments ?? []) console.log(`\n${c.by} · ${String(c.at).slice(0, 10)}\n${c.body}`);
+}
+
+/** Claim the issue, move it to In Progress, and switch to its branch when run in a git repo. */
+async function cmdStart(flags) {
+  const ref = needRef(flags._[0], "start WH-12");
+  const cfg = boardConfig(flags, ref);
+  const r = await board(cfg, "update_issue", { ref, status: "in_progress", assignee: "me" });
+  console.log(`${sym("ok")} ${ref} is In Progress and yours`);
+  const root = repoRoot();
+  if (flags["no-branch"] || !git(["rev-parse", "--git-dir"], { cwd: root })) return;
+  const slug = r.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40).replace(/-$/, "");
+  const name = `wh/${ref}-${slug}`;
+  const exists = git(["rev-parse", "--verify", "--quiet", name], { cwd: root });
+  try {
+    execFileSync("git", exists ? ["switch", name] : ["switch", "-c", name], { cwd: root, stdio: ["ignore", "ignore", "pipe"] });
+    console.log(`${sym("ok")} on branch ${name}${exists ? "" : " (new)"}`);
+  } catch (e) {
+    console.error(`${sym("warn")} could not switch to ${name}: ${String(e.stderr || e.message).trim()}`);
+  }
+}
+
+async function cmdDone(flags) {
+  const ref = needRef(flags._[0], "done WH-12");
+  await board(boardConfig(flags, ref), "update_issue", { ref, status: "review" });
+  console.log(`${sym("ok")} ${ref} is in review`);
+}
+
+async function cmdComment(flags) {
+  const [ref, ...words] = flags._;
+  const body = words.join(" ");
+  if (!body) needRef(null, 'comment WH-12 "what changed"');
+  await board(boardConfig(flags, ref), "comment", { ref: ref.toUpperCase(), body });
+  console.log(`${sym("ok")} commented on ${ref.toUpperCase()}`);
+}
+
+async function cmdNew(flags) {
+  const title = flags._.join(" ");
+  if (!title) needRef(null, 'new "title" [--body TEXT] [--priority P] [--status S] [--cycle current]');
+  const args = { title };
+  for (const k of ["body", "priority", "status", "cycle", "project"]) if (typeof flags[k] === "string") args[k] = flags[k];
+  const r = await board(boardConfig(flags), "create_issue", args);
+  if (flags.json) return console.log(JSON.stringify(r, null, 2));
+  console.log(`${sym("ok")} created ${r.ref}: ${r.title}`);
+}
+
+// ───────── daemon ─────────
+// `wheelhouse daemon …` forwards to the daemon that sits next to this CLI (daemon/ in the same checkout). The standalone
+// `wheelhouse-daemon` stays for servers. Until the daemon is packaged, only a checkout of the repo has one.
+
+const DAEMON_HOME = process.env.WHEELHOUSE_DAEMON_HOME || path.join(HOME_DIR, "daemon"); // the daemon's own settings and logs
+const DAEMON_DIR = path.resolve(path.dirname(fs.realpathSync(process.argv[1])), "..", "..", "daemon");
+
+function cmdDaemon(flags) {
+  const [sub = "help", ...rest] = process.argv.slice(3);
+  if (!fs.existsSync(path.join(DAEMON_DIR, "src", "cli.mjs"))) {
+    console.error(`${sym("fail", detectLevel({ stream: process.stderr }))} No daemon next to this CLI (${DAEMON_DIR}). It ships with the CLI once it is packaged; until then run it from a checkout of shipstackhq/wheelhouse-cli.`);
+    process.exit(1);
+  }
+  const run = (cmd, args) => process.exit(spawnSync(cmd, args, { stdio: "inherit" }).status ?? 1);
+  const entry = path.join(DAEMON_DIR, "src", "main.mjs");
+  const platform = path.join(DAEMON_DIR, "platform");
+  const dry = flags["dry-run"];
+  if (sub === "install" || sub === "uninstall") {
+    if (process.platform === "darwin") return run("sh", [path.join(platform, "macos", `${sub}.sh`), ...(sub === "install" ? ["--entry", entry] : []), ...(dry ? ["--dry-run"] : [])]);
+    if (process.platform === "win32")
+      return run("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(platform, "windows", `${sub}.ps1`), ...(sub === "install" ? ["-Entry", entry] : []), ...(dry ? ["-WhatIf"] : [])]);
+    console.error(`No background service for ${process.platform} yet. Run it in the foreground: wheelhouse daemon run`);
+    process.exit(1);
+  }
+  if (sub === "logs") {
+    const files = ["out", "err"].map((k) => path.join(DAEMON_HOME, "logs", `wheelhouse-daemon.${k}.log`)).filter((f) => fs.existsSync(f));
+    if (!files.length) return console.log("No logs yet: the background service writes them (wheelhouse daemon install).");
+    const follow = rest.includes("-f") || rest.includes("--follow");
+    const lines = Number(rest[rest.findIndex((a) => a === "-n" || a === "--lines") + 1]) || 50;
+    return run("tail", [...(follow ? ["-f"] : []), "-n", String(lines), ...files]);
+  }
+  // pair, status, unpair, run, help: the daemon's own commands.
+  run(process.execPath, [path.join(DAEMON_DIR, "src", "cli.mjs"), sub, ...rest]);
+}
+
+// ───────── integrations ─────────
+// Commands for one agent tool live under `wheelhouse integrations <name>`, so the top level stays about Wheelhouse.
+
+const claudePlugins = (file) => readJson(path.join(os.homedir(), ".claude", "plugins", file), {});
+
+const INTEGRATIONS = {
+  "claude-code": {
+    about: "Claude Code plugin: hooks keep the board and map in sync with each session",
+    installed: () => Object.keys(claudePlugins("installed_plugins.json").plugins || {}).some((k) => k.startsWith("wheelhouse@")),
+    fix: "wheelhouse integrations claude-code install",
+    commands: { hook: ([event]) => runHook(event), install: (_, flags) => installClaudeCode(flags) },
+  },
+};
+
+/** Add the Shipstack marketplace and install the plugin through the `claude` CLI. The key is set in Claude Code, so it never shows in a process list. */
+function installClaudeCode(flags) {
+  const claude = (args) => spawnSync("claude", args, { stdio: "inherit" });
+  if (spawnSync("claude", ["--version"], { stdio: "ignore" }).error) {
+    console.error("Claude Code is not installed (no `claude` command). Install it first: https://claude.com/claude-code");
+    process.exit(1);
+  }
+  if (INTEGRATIONS["claude-code"].installed()) return console.log("✓ the Wheelhouse plugin is already installed in Claude Code");
+  if (!claudePlugins("known_marketplaces.json").shipstack && claude(["plugin", "marketplace", "add", String(flags.from || "shipstackhq/wheelhouse-cli")]).status !== 0) process.exit(1);
+  const url = loadConfig(process.cwd(), flags).url || DEFAULT_URL;
+  if (claude(["plugin", "install", "wheelhouse@shipstack", "--config", `server_url=${url}`]).status !== 0) process.exit(1);
+  console.log(`✓ installed the Wheelhouse plugin for ${url}.\nLast step: run \`claude\`, then /plugin configure wheelhouse@shipstack and paste your API key.`);
+}
+
+async function cmdIntegrations(flags) {
+  const [name, sub, ...args] = flags._;
+  if (!name) {
+    const list = Object.entries(INTEGRATIONS).map(([n, it]) => ({ name: n, installed: it.installed(), about: it.about }));
+    if (flags.json) return console.log(JSON.stringify(list, null, 2));
+    for (const it of list) console.log(`${sym(it.installed ? "ok" : "off")} ${it.name.padEnd(12)} ${it.about}`);
+    return;
+  }
+  const it = INTEGRATIONS[name];
+  if (!it) {
+    console.error(`Unknown integration "${name}". Available: ${Object.keys(INTEGRATIONS).join(", ")}.`);
+    process.exit(1);
+  }
+  const run = it.commands[sub];
+  if (!run) {
+    console.error(`Usage: wheelhouse integrations ${name} <${Object.keys(it.commands).join(" | ")}>`);
+    process.exit(1);
+  }
+  return run(args, flags);
+}
+
+// ───────── doctor ─────────
+
+async function cmdDoctor(flags) {
+  let root = null;
+  try {
+    root = repoRoot();
+  } catch {
+    /* not in a repo */
+  }
+  const cfg = loadConfig(root || process.cwd(), flags);
+  const checks = [];
+  // ok: fine, fail: broken (with the fix), off: optional and not set up.
+  const line = (state, what, fix) => checks.push({ state: { "✓": "ok", "✗": "fail", "·": "off" }[state], check: what, ...(fix ? { fix } : {}) });
+
+  if (!cfg.url) line("✗", "server: not set", "run inside a linked repo, pass --url, or `wheelhouse init --team KEY`");
+  else if (!cfg.key) line("✗", `key: none for ${cfg.url}`, `wheelhouse login --url ${cfg.url}`);
+  else {
+    const r = await checkKey(cfg.url, cfg.key);
+    if (r.state === "ok") line("✓", `server ${cfg.url} accepts the key (${cfg.from.key})`);
+    else if (r.state === "rejected") line("✗", `server ${cfg.url} rejects the key (${cfg.from.key})`, `wheelhouse login --url ${cfg.url}`);
+    else line("✗", `server ${cfg.url} unreachable (${r.message})`, "check the URL, and that the server is running");
+  }
+
+  if (!root) line("·", "repo: not in a git repository");
+  else if (!cfg.team) line("✗", `repo: ${root} is not linked to a team`, "wheelhouse init --team KEY");
+  else {
+    line("✓", `repo linked to team ${cfg.team} (${cfg.from.team})`);
+    const hooksDir = git(["rev-parse", "--git-path", "hooks"], { cwd: root });
+    const hook = hooksDir && path.resolve(root, hooksDir, "post-commit");
+    const ok = hook && fs.existsSync(hook) && fs.readFileSync(hook, "utf8").includes("# >>> wheelhouse");
+    line(ok ? "✓" : "✗", `git hooks ${ok ? "installed" : "missing"}`, ok ? "" : "wheelhouse init (installs them again)");
+  }
+
+  const daemon = readJson(path.join(DAEMON_HOME, "config.json"), {});
+  if (!daemon.deviceId) line("·", "daemon: not paired (only needed to run agents on this machine)", "wheelhouse-daemon pair --server <url>");
+  else {
+    const running = process.platform !== "darwin" || spawnSync("launchctl", ["print", `gui/${process.getuid()}/com.shipstack.wheelhouse-daemon`], { stdio: "ignore" }).status === 0;
+    line(running ? "✓" : "✗", `daemon paired with ${daemon.server} as ${daemon.name}${running ? "" : ", but not running"}`, running ? "" : "wheelhouse-daemon run, or install it as a service");
+  }
+
+  for (const [name, it] of Object.entries(INTEGRATIONS)) line(it.installed() ? "✓" : "·", `integration ${name}: ${it.installed() ? "installed" : "not installed"}`, it.installed() ? "" : it.fix);
+
+  if (flags.json) console.log(JSON.stringify(checks, null, 2));
+  else for (const c of checks) console.log(`${sym(c.state)} ${c.check}${c.fix ? `\n  ${sym("arrow")} ${c.fix}` : ""}`);
+  if (checks.some((c) => c.state === "fail")) process.exit(1);
+}
+
+async function cmdWhoami(flags) {
+  let root = process.cwd();
+  try {
+    root = repoRoot();
+  } catch {
+    /* not in a repo: no wheelhouse.json */
+  }
+  const cfg = loadConfig(root, flags);
+  const check = cfg.url && cfg.key ? await checkKey(cfg.url, cfg.key) : null;
+  if (flags.json) return console.log(JSON.stringify({ server: cfg.url || null, team: cfg.team || null, key: cfg.key ? cfg.key.slice(0, 7) + "…" : null, from: cfg.from, check: check?.state ?? null }, null, 2));
+  if (!cfg.url) return console.log("No server here: run this in a repo linked with `wheelhouse init`, or pass --url.");
+  const from = (k) => (cfg.from[k] ? `  (${cfg.from[k]})` : "");
+  console.log(`server:   ${cfg.url}${from("url")}`);
+  console.log(`team:     ${cfg.team || "(not set)"}${from("team")}`);
+  console.log(`key:      ${cfg.key ? cfg.key.slice(0, 7) + "…" : "(not set)"}${from("key")}`);
+  if (!check) return;
+  console.log(`check:    ${check.state === "ok" ? `${sym("ok")} key accepted` : check.state === "rejected" ? `${sym("fail")} key rejected: run \`wheelhouse login\`` : `${sym("fail")} unreachable (${check.message})`}`);}
 
 async function cmdStatus(flags) {
   const root = repoRoot();
@@ -723,7 +1025,7 @@ async function cmdStatus(flags) {
   console.log(`wheelhouse ${VERSION}`);
   console.log(`repo:     ${root}`);
   console.log(`url:      ${cfg.url || "(not set)"}`);
-  console.log(`project:  ${cfg.project || "(not set)"}`);
+  console.log(`team:     ${cfg.team || "(not set)"}`);
   console.log(`key:      ${cfg.key ? cfg.key.slice(0, 7) + "…" : "(not set)"}`);
   console.log(`branch:   ${branch(root)} (default ${cfg.defaultBranch})`);
   const dirty = dirtyPaths(root);
@@ -733,7 +1035,7 @@ async function cmdStatus(flags) {
   if (!cfg.configured) return;
   try {
     const b = await call(cfg, "get_briefing", { max_chars: 1500 });
-    console.log(`server:   reachable · ${b.stats.openTickets} open tickets · ${b.stats.nodes} map nodes · ${b.stats.stale} stale · ${b.stats.inFlux} in flux`);
+    console.log(`server:   reachable · ${b.stats.openIssues} open issues · ${b.stats.nodes} map nodes · ${b.stats.stale} stale · ${b.stats.inFlux} in flux`);
   } catch (e) {
     console.log(`server:   unreachable (${e.message})`);
   }
@@ -757,7 +1059,8 @@ async function cmdLogin(flags) {
   if (flags.url && typeof flags.key === "string") {
     const url = flags.url.replace(/\/+$/, "");
     saveCredential(url, flags.key);
-    console.log(`✓ saved key for ${url} to ${CRED_FILE}`);
+    rememberDefault({ url });
+    console.log(`✓ saved key for ${url} to ${keyStoreName()}`);
     return;
   }
   if (!canPrompt()) {
@@ -778,25 +1081,45 @@ async function cmdLogin(flags) {
   }
 }
 
+const OVERVIEW = `Board         issues · issue · start · done · comment · new
+Setup         login · init · whoami · doctor · status
+Daemon        daemon status | pair | install | logs
+Integrations  integrations · integrations claude-code install
+
+wheelhouse --help for every command and flag`;
+
 const HELP = `wheelhouse ${VERSION}: Shipstack Wheelhouse CLI
 
-  init --project KEY [--url URL] [--key wh_...] link this repo, install git hooks, record baseline hashes
+  init --team KEY [--url URL] [--key wh_...] link this repo, install git hooks, record baseline hashes
   login [--url URL]                             prompt (URL defaults to the hosted Wheelhouse) for an API key (hidden), check it, and save it. Scripts: login --url URL --key wh_...
   status                                        show config and server state
-  context [TICKET]                              print the project briefing (writes .wheelhouse/context.md) or a ticket's context
+  issues [--mine] [--status S] [--cycle current] [--text T] [--json]  list open issues, most urgent first
+  issue WH-12 [--json]                          an issue with its description and comments
+  start WH-12 [--no-branch]                     claim it, move it to In Progress, switch to branch wh/WH-12-<title>
+  done WH-12                                    move it to In Review
+  comment WH-12 "text"                          comment on it
+  new "title" [--body T] [--priority P] [--cycle current]  create an issue
+  daemon status | pair --server URL | unpair | run | install [--dry-run] | uninstall | logs [-n N] [-f]
+                                                the agent daemon on this machine (forwards to wheelhouse-daemon)
+  doctor [--json]                               check the server, key, repo link, git hooks, daemon and integrations; prints a fix for each problem
+  whoami [--json]                               show the server, team and key in use, where each came from, and whether the key works
+  context [ISSUE]                               print the team briefing (writes .wheelhouse/context.md) or an issue's context
   sync                                          report working-copy changes as a session (for non-Claude Code workflows)
   land [--baseline|--flush] [--from REF --to REF]  report what landed on the default branch. Git hooks only queue it; --flush sends the queue
-  hook <event>                                  Claude Code hook runner: session-start | post-edit | pre-bash | post-bash | prompt | stop | session-end
+  integrations [--json] [NAME COMMAND]          list agent integrations, or run one's command: claude-code install [--from SOURCE] | claude-code hook <session-start | post-edit | pre-bash | post-bash | pre-mcp | prompt | stop | session-end>
 
-Config: ${CONFIG_FILE} (url, project, defaultBranch; commit it). Key: WHEELHOUSE_KEY, the plugin's api_key option, or ~/.config/wheelhouse/credentials.json.
+--plain: no colour or Unicode (also when output is not a terminal, or NO_COLOR is set).
+Config: ${CONFIG_FILE} (url, team, defaultBranch; commit it). Key: WHEELHOUSE_KEY, then 'wheelhouse login' (macOS Keychain, else ~/.wheelhouse/credentials.json), then the plugin's api_key option.
 `;
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   const flags = parseArgs(rest);
   switch (cmd) {
-    case "hook":
+    case "hook": // hidden alias for `integrations claude-code hook`, while installed plugins update
       return runHook(flags._[0]);
+    case "integrations":
+      return cmdIntegrations(flags);
     case "init":
       return cmdInit(flags);
     case "login":
@@ -807,13 +1130,39 @@ async function main() {
       return cmdContext({ ...flags, _: [cmd, ...flags._] });
     case "status":
       return cmdStatus(flags);
+    case "whoami":
+      return cmdWhoami(flags);
+    case "doctor":
+      return cmdDoctor(flags);
+    case "daemon":
+      return cmdDaemon(flags);
+    case "issues":
+      return cmdIssues(flags);
+    case "issue":
+      return cmdIssue(flags);
+    case "start":
+      return cmdStart(flags);
+    case "done":
+      return cmdDone(flags);
+    case "comment":
+      return cmdComment(flags);
+    case "new":
+      return cmdNew(flags);
     case "sync":
       return cmdSync(flags);
     case "--version":
     case "-v":
-      return console.log(VERSION);
-    default:
+      // Scripts get the bare number; a person in a terminal gets the header.
+      return console.log(detectLevel() === "plain" ? VERSION : header({ version: VERSION }));
+    case "--help":
+    case "-h":
+    case "help":
       return console.log(HELP);
+    default:
+      if (cmd) console.error(`unknown command: ${cmd}\n`);
+      else if (detectLevel() !== "plain") console.log(header({ version: VERSION }));
+      console.log(OVERVIEW);
+      if (cmd) process.exitCode = 1;
   }
 }
 

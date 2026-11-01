@@ -41,7 +41,7 @@ before(async () => {
   g("init", "-q", "-b", "main");
   g("config", "user.email", "t@example.com");
   g("config", "user.name", "T");
-  fs.writeFileSync(path.join(repo, "wheelhouse.json"), JSON.stringify({ url: `http://127.0.0.1:${port}`, project: "QQ", defaultBranch: "main" }));
+  fs.writeFileSync(path.join(repo, "wheelhouse.json"), JSON.stringify({ url: `http://127.0.0.1:${port}`, team: "QQ", defaultBranch: "main" }));
   fs.writeFileSync(path.join(repo, "a.txt"), "one\n");
   g("add", "-A");
   g("commit", "-q", "-m", "first");
@@ -52,7 +52,7 @@ after(() => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-const env = (extra = {}) => ({ PATH: process.env.PATH, HOME: home, ...extra });
+const env = (extra = {}) => ({ PATH: process.env.PATH, HOME: home, WHEELHOUSE_KEYSTORE: "file", ...extra });
 const outbox = () => (fs.existsSync(path.join(repo, ".wheelhouse", "outbox")) ? fs.readdirSync(path.join(repo, ".wheelhouse", "outbox")).filter((n) => n.endsWith(".json")) : []);
 const commit = (file, text) => {
   fs.writeFileSync(path.join(repo, file), text);

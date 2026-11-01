@@ -1,6 +1,6 @@
 {
   "name": "@shipstack/wheelhouse-cli",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "CLI and Claude Code hook runner for Shipstack Wheelhouse: keeps the board and knowledge map in sync with your working copy.",
   "type": "module",
   "bin": {
@@ -8,6 +8,7 @@
   },
   "files": [
     "bin",
+    "lib",
     "README.md",
     "LICENSE"
   ],
@@ -22,7 +23,7 @@
     "kanban",
     "cli"
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "author": "Shipstack",
   "repository": {
     "type": "git",

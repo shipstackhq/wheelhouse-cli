@@ -4,15 +4,15 @@ This plugin keeps your Wheelhouse board and knowledge map in sync with what Clau
 
 ## What it does
 
-- **Session start** (including after `/clear` and compaction): reports any commits that landed on the default branch, then injects a compact project briefing and writes it to `.wheelhouse/context.md`.
+- **Session start** (including after `/clear` and compaction): reports any commits that landed on the default branch, then injects a compact team briefing and writes it to `.wheelhouse/context.md`.
 - **Every edit** (Edit / Write / MultiEdit / NotebookEdit), plus files changed by Bash commands: records the file and its content hash against the session. Runs in the background.
 - **Every prompt**: notices files changed outside Claude (e.g. by you in your editor), and mentions new changes from the team.
-- **Before Claude finishes a turn**: if the session changed files, asks Wheelhouse what it still owes. That means a ticket that reflects the work, plus updates or confirmations for the map nodes whose files changed. If anything is owed, Claude is told exactly what and keeps going. There are at most two reminders per prompt, so it never traps the session.
+- **Before Claude finishes a turn**: if the session changed files, asks Wheelhouse what it still owes. That means an issue that reflects the work, plus updates or confirmations for the map nodes whose files changed. If anything is owed, Claude is told exactly what and keeps going. There are at most two reminders per prompt, so it never traps the session.
 - Map updates written against code that hasn't landed on the default branch are saved as **drafts**. They publish automatically when the code lands.
 
 It also adds the Wheelhouse MCP server (board, map, briefing tools), a `wheelhouse` skill, and these commands:
 
-- `/wheelhouse:setup KEY` links this repo to a project
+- `/wheelhouse:setup KEY` links this repo to a team
 - `/wheelhouse:brief` loads the briefing and the queue
 - `/wheelhouse:map-codebase` and `/wheelhouse:map-schema` build the knowledge map
 - `/wheelhouse:refresh-map` re-describes stale nodes
@@ -50,4 +50,4 @@ Commits are also picked up at the next Claude session start or turn end on the d
 - Every hook fails open: if Wheelhouse is unreachable, Claude's work continues and the error is logged to `.wheelhouse/hook.log`.
 - Only file paths and git blob hashes are sent, never file contents. Ticket comments and map explanations are written by Claude through the MCP tools.
 
-`scripts/wheelhouse.mjs` is a copy of the CLI in `../cli/`. Update it with `npm run sync-plugin` at the repo root.
+Hooks call the installed `wheelhouse` CLI (`npm i -g @shipstack/wheelhouse-cli`) through `scripts/wheelhouse.sh`; the plugin keeps no copy of it.

@@ -4,8 +4,9 @@ Client-side tools for [Shipstack Wheelhouse](https://github.com/shipstackhq), th
 
 This repo contains:
 
-- **`cli/`**: the `@shipstack/wheelhouse-cli` npm package, which installs the `wheelhouse` command. It links a repo to a Wheelhouse project, reports what lands on the default branch, and runs the Claude Code hooks.
+- **`cli/`**: the `@shipstack/wheelhouse-cli` npm package, which installs the `wheelhouse` command. It links a repo to a Wheelhouse team, reports what lands on the default branch, and runs the Claude Code hooks.
 - **`plugin/`**: the Claude Code plugin. It adds the hooks, the Wheelhouse MCP server, `/wheelhouse:*` commands, and a skill.
+- **`daemon/`**: the Wheelhouse agent daemon, a background service that runs agent jobs from Wheelhouse on a machine you own. In development and not released; it is its own package and is not part of the plugin.
 - **`.claude-plugin/marketplace.json`**: lets you install the plugin straight from this repo.
 - **`AGENT_README.md`**: a guide for AI agents connecting to Wheelhouse.
 
@@ -19,7 +20,7 @@ This repo contains:
 Claude Code asks for your Wheelhouse URL and an API key (stored in your OS keychain). Then, once per repository:
 
 ```
-/wheelhouse:setup <PROJECT_KEY>
+/wheelhouse:setup <TEAM_KEY>
 ```
 
 The URL defaults to https://wheelhouse.shipstack.run; point it elsewhere only for your own server. From a local clone you can also use `/plugin marketplace add /path/to/wheelhouse-cli`.
@@ -28,18 +29,17 @@ The URL defaults to https://wheelhouse.shipstack.run; point it elsewhere only fo
 
 ```
 npm install -g @shipstack/wheelhouse-cli
-wheelhouse init --project KEY            # add --url for a server other than https://wheelhouse.shipstack.run
+wheelhouse init --team KEY               # add --url for a server other than https://wheelhouse.shipstack.run
 ```
 
 See [cli/README.md](cli/README.md) for the full command list.
 
 ## Development
 
-The plugin bundles a copy of the CLI script, so it works without `npm install`. After changing `cli/bin/wheelhouse.mjs`:
+The plugin calls the installed `wheelhouse` CLI (`npm i -g @shipstack/wheelhouse-cli`, or `npm link` in `cli/` while developing). After changing `cli/bin/wheelhouse.mjs`:
 
 ```
-npm run sync-plugin   # copy the CLI into plugin/scripts/
-npm run check         # verify the copy and validate the plugin
+npm run check         # test the CLI and validate the plugin
 ```
 
 Release the CLI and the plugin together: bump `cli/package.json` and `plugin/.claude-plugin/plugin.json` to the same version. Installed plugins only update when the version changes.
