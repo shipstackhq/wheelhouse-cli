@@ -12,7 +12,7 @@ let repo;
 before(() => {
   repo = fs.mkdtempSync(path.join(os.tmpdir(), "wh-premcp-"));
   spawnSync("git", ["init", "-q"], { cwd: repo });
-  fs.writeFileSync(path.join(repo, "wheelhouse.json"), JSON.stringify({ url: "http://127.0.0.1:1", project: "QQ" }));
+  fs.writeFileSync(path.join(repo, "wheelhouse.json"), JSON.stringify({ url: "http://127.0.0.1:1", team: "QQ" }));
 });
 after(() => fs.rmSync(repo, { recursive: true, force: true }));
 
@@ -22,17 +22,17 @@ const run = (input) => {
 };
 
 test("adds the session to the tool input and keeps every other field", () => {
-  const { out } = run({ session_id: "sess-A", tool_name: "mcp__plugin_wheelhouse_wheelhouse__get_changes", tool_input: { project: "WH", limit: 5 } });
-  assert.deepEqual(out.hookSpecificOutput, { hookEventName: "PreToolUse", updatedInput: { project: "WH", limit: 5, session: "sess-A" } });
+  const { out } = run({ session_id: "sess-A", tool_name: "mcp__plugin_wheelhouse_wheelhouse__get_changes", tool_input: { team: "WH", limit: 5 } });
+  assert.deepEqual(out.hookSpecificOutput, { hookEventName: "PreToolUse", updatedInput: { team: "WH", limit: 5, session: "sess-A" } });
 });
 
 test("overwrites a session the model passed, right or wrong", () => {
-  const { out } = run({ session_id: "sess-A", tool_name: "mcp__plugin_wheelhouse_wheelhouse__ack_changes", tool_input: { project: "WH", seq: 9, session: "made-up-by-the-model" } });
+  const { out } = run({ session_id: "sess-A", tool_name: "mcp__plugin_wheelhouse_wheelhouse__get_changes", tool_input: { team: "WH", ack: 9, session: "made-up-by-the-model" } });
   assert.equal(out.hookSpecificOutput.updatedInput.session, "sess-A");
 });
 
 test("never sets a permission decision (must not auto-approve Wheelhouse tools)", () => {
-  const { out } = run({ session_id: "sess-A", tool_name: "mcp__plugin_wheelhouse_wheelhouse__delete_node", tool_input: { project: "WH", node: "x" } });
+  const { out } = run({ session_id: "sess-A", tool_name: "mcp__plugin_wheelhouse_wheelhouse__update_map", tool_input: { team: "WH", changes: [] } });
   assert.ok(!("permissionDecision" in out.hookSpecificOutput));
 });
 
@@ -50,4 +50,14 @@ test("the plugin's hooks.json wires it to the Wheelhouse MCP tools and the copy 
   assert.ok(entry, "pre-mcp hook registered");
   assert.ok(new RegExp(`^(?:${entry.matcher})$`).test("mcp__plugin_wheelhouse_wheelhouse__get_changes"));
   assert.ok(!new RegExp(`^(?:${entry.matcher})$`).test("mcp__other__get_changes"));
+});
+
+test("an old wheelhouse.json with `project` is refused with a re-run-init message", () => {
+  const old = fs.mkdtempSync(path.join(os.tmpdir(), "wh-oldcfg-"));
+  spawnSync("git", ["init", "-q"], { cwd: old });
+  fs.writeFileSync(path.join(old, "wheelhouse.json"), JSON.stringify({ url: "http://127.0.0.1:1", project: "QQ" }));
+  const r = spawnSync("node", [script, "status"], { cwd: old, encoding: "utf8" });
+  fs.rmSync(old, { recursive: true, force: true });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /wheelhouse init --team QQ/);
 });

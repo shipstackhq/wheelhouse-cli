@@ -41,7 +41,7 @@ before(async () => {
   g("init", "-q", "-b", "main");
   g("config", "user.email", "t@example.com");
   g("config", "user.name", "T");
-  fs.writeFileSync(path.join(repo, "wheelhouse.json"), JSON.stringify({ url: `http://127.0.0.1:${port}`, project: "QQ", defaultBranch: "main" }));
+  fs.writeFileSync(path.join(repo, "wheelhouse.json"), JSON.stringify({ url: `http://127.0.0.1:${port}`, team: "QQ", defaultBranch: "main" }));
   fs.writeFileSync(path.join(repo, "a.txt"), "one\n");
   g("add", "-A");
   g("commit", "-q", "-m", "first");

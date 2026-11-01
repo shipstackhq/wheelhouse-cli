@@ -34,7 +34,7 @@ before(async () => {
   port = server.address().port;
   repo = fs.mkdtempSync(path.join(os.tmpdir(), "wh-removal-"));
   spawnSync("git", ["init", "-q"], { cwd: repo });
-  fs.writeFileSync(path.join(repo, "wheelhouse.json"), JSON.stringify({ url: `http://127.0.0.1:${port}`, project: "QQ" }));
+  fs.writeFileSync(path.join(repo, "wheelhouse.json"), JSON.stringify({ url: `http://127.0.0.1:${port}`, team: "QQ" }));
 });
 after(() => {
   server.close();
