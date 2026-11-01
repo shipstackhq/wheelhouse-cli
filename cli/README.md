@@ -12,8 +12,9 @@ It has no dependencies and runs on Node 18+ with git.
 
 ```
 wheelhouse init --team KEY [--url URL] [--key wh_...] link this repo, install git hooks, record baseline hashes
-wheelhouse login [--url URL]                             prompt (URL defaults to https://wheelhouse.shipstack.run) for an API key (hidden), check it, store it (scripts: --url URL --key wh_...) (~/.config/wheelhouse/credentials.json, mode 600)
+wheelhouse login [--url URL]                             prompt (URL defaults to https://wheelhouse.shipstack.run) for an API key (hidden), check it, store it (scripts: --url URL --key wh_...)
 wheelhouse status                                        config and server state
+wheelhouse whoami                                        the server, team and key in use, where each came from, and whether the key works
 wheelhouse context [ISSUE]                               print the team briefing (and write .wheelhouse/context.md) or an issue's context
 wheelhouse sync                                          report working-copy changes as a session (for workflows without Claude Code)
 wheelhouse land [--baseline|--flush] [--from REF --to REF]  report what landed on the default branch. Git hooks only queue it locally; --flush sends the queue
@@ -24,14 +25,15 @@ wheelhouse hook <event>                                  Claude Code hook runner
 
 `wheelhouse.json` at the repo root holds `url`, `team` and `defaultBranch`. Commit it.
 
-The API key is resolved in this order:
+Each setting comes from the first of these that is set (`wheelhouse whoami` shows which one won):
 
-1. `--key`
-2. `WHEELHOUSE_KEY`
-3. the Claude Code plugin's `api_key` option
-4. `~/.config/wheelhouse/credentials.json`
+1. a flag: `--url`, `--key`, `--team`
+2. `WHEELHOUSE_URL`, `WHEELHOUSE_KEY`, `WHEELHOUSE_TEAM`
+3. the key saved by `wheelhouse login`, per server URL: the macOS Keychain, or `~/.wheelhouse/credentials.json` (mode 600) elsewhere
+4. `wheelhouse.json` (url, team)
+5. the Claude Code plugin's `server_url` and `api_key` options, as a fallback
 
-`WHEELHOUSE_URL` and `WHEELHOUSE_TEAM` override the file.
+Keys saved by older versions in `~/.config/wheelhouse/credentials.json` move over on first use.
 
 ## How sync works
 

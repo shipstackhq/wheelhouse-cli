@@ -8,7 +8,7 @@
 // Every hook fails OPEN: if Wheelhouse is unreachable or anything throws, the
 // agent's work continues and the error is logged to .wheelhouse/hook.log.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,7 +16,9 @@ import path from "node:path";
 const VERSION = "0.2.0";
 const CONFIG_FILE = "wheelhouse.json"; // committed: { url, team, defaultBranch }
 const STATE_DIR = ".wheelhouse"; // gitignored: context.md, sessions/, hook.log
-const CRED_FILE = path.join(os.homedir(), ".config", "wheelhouse", "credentials.json");
+const HOME_DIR = path.join(os.homedir(), ".wheelhouse"); // per user: credentials (off macOS), daemon/
+const CRED_FILE = path.join(HOME_DIR, "credentials.json");
+const OLD_CRED_FILE = path.join(os.homedir(), ".config", "wheelhouse", "credentials.json"); // before 0.2.0
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const BASELINE_PENDING = "baseline-pending"; // marker in .wheelhouse/: init ran without a key, the plugin sends the baseline
 const QUEUE_DIGEST = 10; // changes injected per prompt; the rest stay queued for get_changes
@@ -100,16 +102,67 @@ const rel = (root, p) => {
 
 function loadConfig(root, flags = {}) {
   const file = readJson(path.join(root, CONFIG_FILE), {});
-  const url = (flags.url || process.env.WHEELHOUSE_URL || process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL || file.url || "").replace(/\/+$/, "");
-  const creds = readJson(CRED_FILE, {});
-  const key = flags.key || process.env.WHEELHOUSE_KEY || process.env.CLAUDE_PLUGIN_OPTION_API_KEY || (url && creds[url]) || "";
+  // First that is set wins. Wheelhouse's own settings come first; the Claude Code plugin's options are a fallback.
+  const [url, urlFrom] = pick([flags.url, "--url"], [process.env.WHEELHOUSE_URL, "WHEELHOUSE_URL"], [file.url, CONFIG_FILE], [process.env.CLAUDE_PLUGIN_OPTION_SERVER_URL, "plugin"]);
+  const [key, keyFrom] = pick([flags.key, "--key"], [process.env.WHEELHOUSE_KEY, "WHEELHOUSE_KEY"], [() => url && loadKey(url), keyStoreName()], [process.env.CLAUDE_PLUGIN_OPTION_API_KEY, "plugin"]);
   if (file.project && !file.team) {
     console.error(`${CONFIG_FILE} uses the old \`project\` field. Wheelhouse now links a repo to a team: run \`wheelhouse init --team ${file.project}\` again.`);
     process.exit(1);
   }
-  const team = flags.team || process.env.WHEELHOUSE_TEAM || file.team || "";
+  const [team, teamFrom] = pick([flags.team, "--team"], [process.env.WHEELHOUSE_TEAM, "WHEELHOUSE_TEAM"], [file.team, CONFIG_FILE]);
   const defaultBranch = file.defaultBranch || detectDefaultBranch(root) || "main";
-  return { url, key, team, defaultBranch, configured: !!(url && key && team) };
+  return { url, key, team, defaultBranch, from: { url: urlFrom, key: keyFrom, team: teamFrom }, configured: !!(url && key && team) };
+}
+
+/** The first source that is set, as [value, where it came from]. A function is only called when reached. */
+function pick(...sources) {
+  for (const [v, from] of sources) {
+    const value = typeof v === "function" ? v() : v;
+    if (typeof value === "string" && value) return [value.replace(/\/+$/, ""), from];
+  }
+  return ["", null];
+}
+
+// ───────── keys ─────────
+// macOS: the login Keychain, one item per server URL. Elsewhere (and with WHEELHOUSE_KEYSTORE=file, which tests use):
+// ~/.wheelhouse/credentials.json, readable only by this user. Keys saved before 0.2.0 move over on first use.
+
+const KEYCHAIN_SERVICE = "com.shipstack.wheelhouse";
+const useKeychain = () => (process.env.WHEELHOUSE_KEYSTORE || (process.platform === "darwin" ? "keychain" : "file")) === "keychain";
+const keyStoreName = () => (useKeychain() ? "Keychain" : CRED_FILE);
+
+function loadKey(url) {
+  migrateOldCredentials();
+  if (!useKeychain()) return readJson(CRED_FILE, {})[url] || "";
+  try {
+    return execFileSync("security", ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", url, "-w"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return "";
+  }
+}
+
+/** Save a key for a server; chmod too, because the mode on writeFile only applies when the file is created. */
+function saveCredential(url, key) {
+  if (useKeychain()) {
+    // `security -i` reads the command from stdin, so the key never shows in the process list.
+    const r = spawnSync("security", ["-i"], { input: `add-generic-password -U -s "${KEYCHAIN_SERVICE}" -a "${url}" -l "Wheelhouse (${url})" -w "${key}"\n`, encoding: "utf8" });
+    if (r.status !== 0) throw new Error(`could not save the key in the Keychain: ${(r.stderr || r.stdout || "").trim()}`);
+    return;
+  }
+  const creds = readJson(CRED_FILE, {});
+  creds[url] = key;
+  writeJson(CRED_FILE, creds, 0o600);
+  try {
+    fs.chmodSync(CRED_FILE, 0o600);
+  } catch {
+    /* best effort */
+  }
+}
+
+function migrateOldCredentials() {
+  if (!fs.existsSync(OLD_CRED_FILE)) return;
+  for (const [url, key] of Object.entries(readJson(OLD_CRED_FILE, {}))) saveCredential(url, key);
+  fs.rmSync(OLD_CRED_FILE);
 }
 
 function detectDefaultBranch(root) {
@@ -147,17 +200,6 @@ const LOGIN_TRIES = 3;
 
 const canPrompt = () => !!(process.stdin.isTTY && process.stdout.isTTY) && !process.env.CI;
 
-/** Save a key for a server; chmod too, because the mode on writeFile only applies when the file is created. */
-function saveCredential(url, key) {
-  const creds = readJson(CRED_FILE, {});
-  creds[url] = key;
-  writeJson(CRED_FILE, creds, 0o600);
-  try {
-    fs.chmodSync(CRED_FILE, 0o600);
-  } catch {
-    /* best effort */
-  }
-}
 
 /** Read one line from the terminal. With `hidden`, nothing is echoed (not even asterisks), so the key never reaches the screen or scrollback. */
 function prompt(question, { hidden = false, fallback = "" } = {}) {
@@ -219,7 +261,7 @@ async function interactiveLogin(root, flags = {}) {
       const r = await checkKey(url, key);
       if (r.state === "ok") {
         saveCredential(url, key);
-        console.log(`✓ logged in to ${url}; key saved to ${CRED_FILE}`);
+        console.log(`✓ logged in to ${url}; key saved to ${keyStoreName()}`);
         return { url, key };
       }
       if (r.state === "unreachable") {
@@ -566,7 +608,7 @@ async function cmdInit(flags) {
 
   if (flags.key) {
     saveCredential(url, String(flags.key));
-    console.log(`✓ saved API key for ${url} to ${CRED_FILE}`);
+    console.log(`✓ saved API key for ${url} to ${keyStoreName()}`);
   }
 
   // .gitignore
@@ -727,6 +769,23 @@ async function cmdContext(flags) {
   process.stdout.write(r.markdown + "\n");
 }
 
+async function cmdWhoami(flags) {
+  let root = process.cwd();
+  try {
+    root = repoRoot();
+  } catch {
+    /* not in a repo: no wheelhouse.json */
+  }
+  const cfg = loadConfig(root, flags);
+  const from = (k) => (cfg.from[k] ? `  (${cfg.from[k]})` : "");
+  console.log(`server:   ${cfg.url || "(not set)"}${from("url")}`);
+  console.log(`team:     ${cfg.team || "(not set)"}${from("team")}`);
+  console.log(`key:      ${cfg.key ? cfg.key.slice(0, 7) + "…" : "(not set)"}${from("key")}`);
+  if (!cfg.url || !cfg.key) return;
+  const r = await checkKey(cfg.url, cfg.key);
+  console.log(`check:    ${r.state === "ok" ? "✓ key accepted" : r.state === "rejected" ? "✗ key rejected: run `wheelhouse login`" : `✗ unreachable (${r.message})`}`);
+}
+
 async function cmdStatus(flags) {
   const root = repoRoot();
   const cfg = loadConfig(root, flags);
@@ -767,7 +826,7 @@ async function cmdLogin(flags) {
   if (flags.url && typeof flags.key === "string") {
     const url = flags.url.replace(/\/+$/, "");
     saveCredential(url, flags.key);
-    console.log(`✓ saved key for ${url} to ${CRED_FILE}`);
+    console.log(`✓ saved key for ${url} to ${keyStoreName()}`);
     return;
   }
   if (!canPrompt()) {
@@ -793,12 +852,13 @@ const HELP = `wheelhouse ${VERSION}: Shipstack Wheelhouse CLI
   init --team KEY [--url URL] [--key wh_...] link this repo, install git hooks, record baseline hashes
   login [--url URL]                             prompt (URL defaults to the hosted Wheelhouse) for an API key (hidden), check it, and save it. Scripts: login --url URL --key wh_...
   status                                        show config and server state
+  whoami                                        show the server, team and key in use, where each came from, and whether the key works
   context [ISSUE]                               print the team briefing (writes .wheelhouse/context.md) or an issue's context
   sync                                          report working-copy changes as a session (for non-Claude Code workflows)
   land [--baseline|--flush] [--from REF --to REF]  report what landed on the default branch. Git hooks only queue it; --flush sends the queue
   hook <event>                                  Claude Code hook runner: session-start | post-edit | pre-bash | post-bash | prompt | stop | session-end
 
-Config: ${CONFIG_FILE} (url, team, defaultBranch; commit it). Key: WHEELHOUSE_KEY, the plugin's api_key option, or ~/.config/wheelhouse/credentials.json.
+Config: ${CONFIG_FILE} (url, team, defaultBranch; commit it). Key: WHEELHOUSE_KEY, then 'wheelhouse login' (macOS Keychain, else ~/.wheelhouse/credentials.json), then the plugin's api_key option.
 `;
 
 async function main() {
@@ -817,6 +877,8 @@ async function main() {
       return cmdContext({ ...flags, _: [cmd, ...flags._] });
     case "status":
       return cmdStatus(flags);
+    case "whoami":
+      return cmdWhoami(flags);
     case "sync":
       return cmdSync(flags);
     case "--version":

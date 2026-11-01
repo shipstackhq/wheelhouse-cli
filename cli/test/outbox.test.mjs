@@ -52,7 +52,7 @@ after(() => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-const env = (extra = {}) => ({ PATH: process.env.PATH, HOME: home, ...extra });
+const env = (extra = {}) => ({ PATH: process.env.PATH, HOME: home, WHEELHOUSE_KEYSTORE: "file", ...extra });
 const outbox = () => (fs.existsSync(path.join(repo, ".wheelhouse", "outbox")) ? fs.readdirSync(path.join(repo, ".wheelhouse", "outbox")).filter((n) => n.endsWith(".json")) : []);
 const commit = (file, text) => {
   fs.writeFileSync(path.join(repo, file), text);

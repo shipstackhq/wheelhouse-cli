@@ -30,18 +30,18 @@ after(() => {
 });
 
 const run = (args, env = {}) =>
-  spawnSync("node", [script, ...args], { cwd: repo, input: "", encoding: "utf8", env: { PATH: process.env.PATH, HOME: home, ...env } });
+  spawnSync("node", [script, ...args], { cwd: repo, input: "", encoding: "utf8", env: { PATH: process.env.PATH, HOME: home, WHEELHOUSE_KEYSTORE: "file", ...env } });
 // The fake server lives in this process, so anything that talks to it must not block the event loop.
 const runAsync = (args, env = {}) =>
   new Promise((resolve) => {
-    const p = spawn("node", [script, ...args], { cwd: repo, env: { PATH: process.env.PATH, HOME: home, ...env } });
+    const p = spawn("node", [script, ...args], { cwd: repo, env: { PATH: process.env.PATH, HOME: home, WHEELHOUSE_KEYSTORE: "file", ...env } });
     let stdout = "", stderr = "";
     p.stdout.on("data", (c) => (stdout += c));
     p.stderr.on("data", (c) => (stderr += c));
     p.stdin.end();
     p.on("close", (status) => resolve({ status, stdout, stderr }));
   });
-const credFile = () => path.join(home, ".config", "wheelhouse", "credentials.json");
+const credFile = () => path.join(home, ".wheelhouse", "credentials.json");
 
 test("scripted login (--url and --key) saves the key with mode 0600", () => {
   const r = run(["login", "--url", `${url}/`, "--key", "wh_good"]);
@@ -67,7 +67,7 @@ test("init in a script with no key links the repo, does not prompt, and leaves t
   fs.rmSync(credFile(), { force: true });
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), "wh-login-nokey-"));
   spawnSync("git", ["init", "-q"], { cwd: fresh });
-  const r = spawnSync("node", [script, "init", "--url", url, "--team", "QQ"], { cwd: fresh, input: "", encoding: "utf8", env: { PATH: process.env.PATH, HOME: home } });
+  const r = spawnSync("node", [script, "init", "--url", url, "--team", "QQ"], { cwd: fresh, input: "", encoding: "utf8", env: { PATH: process.env.PATH, HOME: home, WHEELHOUSE_KEYSTORE: "file" } });
   assert.equal(r.status, 0);
   assert.match(r.stderr, /No API key on this machine/);
   assert.match(r.stderr, /queue commits locally/);
@@ -88,7 +88,7 @@ test("the login URL prompt defaults to the hosted Wheelhouse and init no longer 
   assert.match(src, /DEFAULT_URL = "https:\/\/wheelhouse\.shipstack\.run"/);
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), "wh-login-fresh-"));
   spawnSync("git", ["init", "-q"], { cwd: fresh });
-  const r = spawnSync("node", [script, "init"], { cwd: fresh, input: "", encoding: "utf8", env: { PATH: process.env.PATH, HOME: home } }); // no team: usage names the default
+  const r = spawnSync("node", [script, "init"], { cwd: fresh, input: "", encoding: "utf8", env: { PATH: process.env.PATH, HOME: home, WHEELHOUSE_KEYSTORE: "file" } }); // no team: usage names the default
   fs.rmSync(fresh, { recursive: true, force: true });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /https:\/\/wheelhouse\.shipstack\.run/);
