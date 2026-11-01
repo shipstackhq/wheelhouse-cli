@@ -197,8 +197,8 @@ The offer's `repository.checks` (`[{ name, command, cwd?, required }]`, the repo
 the agent finishes and before the push (`src/selfcheck.mjs`). Each ends `passed`, `failed` (non-zero exit) or `could_not_run` (no such
 tool, bad directory, timeout, stop); none is skipped. A failed required check goes back to the agent with its output tail, at most twice;
 then the run finishes `failed`, naming the check, with the branch still pushed. A check that could not run is not retried. The finish
-carries `checks: [{ name, command, required, status, exitCode, durationMs, tail }]`, and Wheelhouse opens no pull request while a
-required check has not passed.
+carries `checks: [{ name, command, required, status, exitCode, durationMs, tail }]` and `checkedSha`, the commit they ran on (WH-191; a
+commit pushed later, or by a person, has no results), and Wheelhouse opens no pull request while a required check has not passed.
 
 ## Out of scope for the MVP
 

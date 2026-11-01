@@ -48,6 +48,7 @@ test("clone once, worktree on the job's branch, commit what was left, push, and 
   const sum = await ws.summary(dir, base);
   assert.equal(sum.ahead, 1);
   assert.deepEqual(sum.diffStats, { files: 2, insertions: 2, deletions: 0 });
+  assert.equal(await ws.head(dir), sum.commit, "head is the commit the worktree is on");
 
   await ws.push(dir, "wh/WH-1-readme");
   assert.equal(g(origin, "rev-parse", "refs/heads/wh/WH-1-readme"), sum.commit);

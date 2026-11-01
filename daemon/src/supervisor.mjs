@@ -228,11 +228,13 @@ export class Supervisor {
       // WH-171: before anything is pushed, the repository's checks run on what the agent committed. A check that failed goes back to the
       // agent with its output, up to MAX_FIX_ATTEMPTS times; one that could not run cannot be fixed by the agent, so it just ends the run.
       let checks = [];
+      let checkedSha = null;
       const toRun = m.repository.checks ?? [];
       for (let attempt = 0; !review && r.ok && toRun.length && !superseded() && !signal.aborted; attempt++) {
         await this.workspace.commitLeftovers(cwd, `${m.issue.ref}: work in progress from the agent run`);
         phase("checks", toRun.map((c) => c.name).join(", "));
         checks = await runChecks(toRun, cwd, signal, ({ tail, ...c }) => reporter.event("check", c));
+        checkedSha = await this.workspace.head(cwd); // WH-191: the checks describe this commit, whatever is pushed later
         const bad = blocking(checks);
         if (!bad || bad.status !== "failed" || attempt >= MAX_FIX_ATTEMPTS || signal.aborted) break;
         phase("fixing", `${bad.name} (attempt ${attempt + 1} of ${MAX_FIX_ATTEMPTS})`);
@@ -260,7 +262,7 @@ export class Supervisor {
           pushed = true;
         }
       }
-      const result = { commit: sum.commit, pushed, diffStats: sum.diffStats, costUsd: r.result?.costUsd ?? null, durationMs: this.now() - started, ...(r.result?.learnings?.length ? { learnings: r.result.learnings } : {}), ...(checks.length ? { checks } : {}) };
+      const result = { commit: sum.commit, pushed, diffStats: sum.diffStats, costUsd: r.result?.costUsd ?? null, durationMs: this.now() - started, ...(r.result?.learnings?.length ? { learnings: r.result.learnings } : {}), ...(checks.length ? { checks, checkedSha } : {}) };
       const bad = blocking(checks);
       if (r.stopped === "canceled" || signal.aborted) outcome = { state: "canceled", ...result, error: stopped() };
       else if (r.stopped === "timeout") outcome = { state: "failed", ...result, error: `The agent ran past the ${this.config.runner.timeoutMinutes}-minute limit` };

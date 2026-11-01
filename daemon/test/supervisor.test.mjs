@@ -68,6 +68,7 @@ function setup({ poolSize = 2 } = {}) {
     ensureClone: async () => "/repo",
     createWorktree: async (_r, jobId) => ({ dir: `/wt/${jobId}`, base: "origin/main" }),
     commitLeftovers: async () => (calls.push("commit"), false),
+    head: async () => "c0ffee1234",
     summary: async () => ({ ahead: 1, commit: "abc1234", diffStats: { files: 1, insertions: 2, deletions: 0 } }),
     push: async () => void calls.push("push"),
     removeWorktree: async () => {},
@@ -392,6 +393,7 @@ test("a check that keeps failing goes back to the agent twice, then fails the ru
   assert.match(outcome.error, /Check "lint" failed: 1 error/);
   assert.deepEqual(finish.checks.map((c) => [c.name, c.status, c.exitCode]), [["install", "passed", 0], ["lint", "failed", 1]]);
   assert.match(finish.checks[1].tail, /1 error/);
+  assert.equal(finish.checkedSha, "c0ffee1234", "and the commit they ran on, so Wheelhouse can tell which commit they describe");
 });
 
 test("a fix that makes the checks pass lets the run succeed", async () => {

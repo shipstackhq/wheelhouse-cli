@@ -186,6 +186,11 @@ export class Workspace {
     }
   }
 
+  /** The commit the worktree is on. */
+  head(dir) {
+    return git(dir, "rev-parse", "HEAD");
+  }
+
   async summary(dir, base) {
     const ahead = Number(await git(dir, "rev-list", "--count", `${base}..HEAD`)) || 0;
     const commit = await git(dir, "rev-parse", "HEAD");
