@@ -1081,6 +1081,13 @@ async function cmdLogin(flags) {
   }
 }
 
+const OVERVIEW = `Board         issues · issue · start · done · comment · new
+Setup         login · init · whoami · doctor · status
+Daemon        daemon status | pair | install | logs
+Integrations  integrations · integrations claude-code install
+
+wheelhouse --help for every command and flag`;
+
 const HELP = `wheelhouse ${VERSION}: Shipstack Wheelhouse CLI
 
   init --team KEY [--url URL] [--key wh_...] link this repo, install git hooks, record baseline hashes
@@ -1147,9 +1154,15 @@ async function main() {
     case "-v":
       // Scripts get the bare number; a person in a terminal gets the header.
       return console.log(detectLevel() === "plain" ? VERSION : header({ version: VERSION }));
-    default:
-      if (detectLevel() !== "plain") console.log(header({ version: VERSION }));
+    case "--help":
+    case "-h":
+    case "help":
       return console.log(HELP);
+    default:
+      if (cmd) console.error(`unknown command: ${cmd}\n`);
+      else if (detectLevel() !== "plain") console.log(header({ version: VERSION }));
+      console.log(OVERVIEW);
+      if (cmd) process.exitCode = 1;
   }
 }
 
