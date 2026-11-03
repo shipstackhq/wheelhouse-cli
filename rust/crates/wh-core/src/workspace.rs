@@ -2,15 +2,15 @@
 //! job needs it (with the user's own git credentials), keeps it, and gives every job a fresh worktree on the job's branch from the
 //! repository's default branch, and every chat thread a detached one on that branch's tip. The user's own checkouts are never touched.
 //!
-//! Port of `daemon/src/workspace.mjs`. Every git operation runs the `git` executable. The calls are synchronous: the connection layer
-//! will run them off its async tasks. Per-repository locking is not needed yet, because nothing calls this concurrently.
+//! Port of `daemon/src/workspace.mjs`. Every git operation runs the `git` executable, asynchronously, with a timeout. Clones and
+//! fetches of one repository run one at a time.
 
 use crate::config::Paths;
 use regex::Regex;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::OnceLock;
-use std::time::SystemTime;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, SystemTime};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GitError(pub String);
@@ -26,14 +26,27 @@ fn err(msg: impl Into<String>) -> GitError {
     GitError(msg.into())
 }
 
-/// Run `git <args>` in `cwd`. On failure the error names the command and the last lines of its stderr.
-pub fn git(cwd: &Path, args: &[&str]) -> Result<String, GitError> {
-    let out = Command::new("git")
-        .args(args)
+/// How long a git command may run. Clones and fetches of big repositories take longest.
+fn timeout_for(args: &[&str]) -> Duration {
+    match args.first().copied() {
+        Some("clone") => Duration::from_secs(30 * 60),
+        Some("fetch") => Duration::from_secs(15 * 60),
+        _ => Duration::from_secs(10 * 60),
+    }
+}
+
+/// Run `git <args>` in `cwd`, with a timeout. On failure the error names the command and the last lines of its stderr.
+pub async fn git(cwd: &Path, args: &[&str]) -> Result<String, GitError> {
+    let mut cmd = tokio::process::Command::new("git");
+    cmd.args(args)
         .current_dir(cwd)
         .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .map_err(|e| err(format!("git {}: {e}", args.join(" "))))?;
+        .kill_on_drop(true);
+    let describe = args.join(" ");
+    let out = tokio::time::timeout(timeout_for(args), cmd.output())
+        .await
+        .map_err(|_| err(format!("git {describe}: timed out")))?
+        .map_err(|e| err(format!("git {describe}: {e}")))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let lines: Vec<&str> = stderr.trim().lines().collect();
@@ -43,7 +56,7 @@ pub fn git(cwd: &Path, args: &[&str]) -> Result<String, GitError> {
         } else {
             tail
         };
-        return Err(err(format!("git {}: {detail}", args.join(" "))));
+        return Err(err(format!("git {describe}: {detail}")));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
@@ -129,6 +142,8 @@ pub enum SyncResult {
 pub struct Workspace {
     pub paths: Paths,
     pub protocol: String,
+    /// One clone or fetch at a time per repository, as the Node code does.
+    locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl Workspace {
@@ -136,6 +151,7 @@ impl Workspace {
         Workspace {
             paths,
             protocol: protocol.into(),
+            locks: Mutex::new(HashMap::new()),
         }
     }
 
@@ -173,12 +189,17 @@ impl Workspace {
     }
 
     /// Clone the repository the first time, fetch it every time after. `on_phase` gets "cloning" or "fetching" and the label.
-    pub fn ensure_clone(
+    pub async fn ensure_clone(
         &self,
         repo: &RepoRef,
         mut on_phase: impl FnMut(&str, &str),
     ) -> Result<PathBuf, GitError> {
         let dir = self.repo_dir(&repo.id)?;
+        let lock = {
+            let mut locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
+            locks.entry(repo.id.clone()).or_default().clone()
+        };
+        let _one_at_a_time = lock.lock().await;
         if !dir.join("HEAD").exists() {
             on_phase("cloning", repo.label());
             std::fs::create_dir_all(&self.paths.repos).map_err(|e| err(e.to_string()))?;
@@ -188,7 +209,8 @@ impl Workspace {
             git(
                 Path::new("."),
                 &["clone", "--bare", &url, &tmp.display().to_string()],
-            )?;
+            )
+            .await?;
             // A bare clone maps branches straight to refs/heads; fetch them as origin/* instead, like a normal clone.
             git(
                 &tmp,
@@ -197,19 +219,20 @@ impl Workspace {
                     "remote.origin.fetch",
                     "+refs/heads/*:refs/remotes/origin/*",
                 ],
-            )?;
+            )
+            .await?;
             std::fs::rename(&tmp, &dir).map_err(|e| err(e.to_string()))?;
         } else {
             on_phase("fetching", repo.label());
         }
-        git(&dir, &["fetch", "--prune", "origin"])?;
+        git(&dir, &["fetch", "--prune", "origin"]).await?;
         Ok(dir)
     }
 
     /// A new worktree for the job, on its branch, from origin/<base>: the base the run was told to start from (for a continuation, the
     /// job's own branch as the earlier run pushed it), else the repository's default. `base` in the answer is that start point, so the
     /// summary and the push count only what this run added.
-    pub fn create_worktree(
+    pub async fn create_worktree(
         &self,
         repo: &RepoRef,
         job_id: &str,
@@ -231,13 +254,15 @@ impl Workspace {
             return Err(err(format!("refusing base branch {from}")));
         }
         let base = format!("origin/{from}");
-        self.check_start_point(&repo_dir, &base, repo.label())?;
+        self.check_start_point(&repo_dir, &base, repo.label())
+            .await?;
 
         // Continuing a stopped or lost run: its kept worktree still has the branch checked out, and git will not check one branch out
         // twice. Save what it left, free the branch, and pick it up where it was (its commits may never have been pushed).
-        if let Some(holder) = self.worktree_holding(&repo_dir, branch)? {
-            let _ =
-                self.commit_leftovers(&holder, &format!("{branch}: work left by the stopped run"));
+        if let Some(holder) = self.worktree_holding(&repo_dir, branch).await? {
+            let _ = self
+                .commit_leftovers(&holder, &format!("{branch}: work left by the stopped run"))
+                .await;
             if git(
                 &repo_dir,
                 &[
@@ -247,15 +272,17 @@ impl Workspace {
                     &holder.display().to_string(),
                 ],
             )
+            .await
             .is_err()
             {
                 let _ = std::fs::remove_dir_all(&holder);
-                let _ = git(&repo_dir, &["worktree", "prune"]);
+                let _ = git(&repo_dir, &["worktree", "prune"]).await;
             }
             git(
                 &repo_dir,
                 &["worktree", "add", &dir.display().to_string(), branch],
-            )?;
+            )
+            .await?;
             return Ok(Worktree { dir, base });
         }
         git(
@@ -268,11 +295,17 @@ impl Workspace {
                 &dir.display().to_string(),
                 &base,
             ],
-        )?;
+        )
+        .await?;
         Ok(Worktree { dir, base })
     }
 
-    fn check_start_point(&self, repo_dir: &Path, base: &str, label: &str) -> Result<(), GitError> {
+    async fn check_start_point(
+        &self,
+        repo_dir: &Path,
+        base: &str,
+        label: &str,
+    ) -> Result<(), GitError> {
         git(
             repo_dir,
             &[
@@ -282,6 +315,7 @@ impl Workspace {
                 &format!("{base}^{{commit}}"),
             ],
         )
+        .await
         .map(|_| ())
         .map_err(|_| {
             err(format!(
@@ -294,7 +328,11 @@ impl Workspace {
     /// The chat thread's worktree: detached (no branch, so nothing a job uses), made on first use at the tip of origin/<default branch>.
     /// After that it stays where it is, since the chat may have moved it and should find it there on the next message. Its folder is
     /// touched each time, so it is pruned only when the thread goes unused. The caller has fetched (ensure_clone).
-    pub fn chat_worktree(&self, repo: &RepoRef, thread_id: &str) -> Result<ChatWorktree, GitError> {
+    pub async fn chat_worktree(
+        &self,
+        repo: &RepoRef,
+        thread_id: &str,
+    ) -> Result<ChatWorktree, GitError> {
         let repo_dir = self.repo_dir(&repo.id)?;
         let dir = self.worktree_dir(&repo.id, thread_id, &self.paths.chats)?;
         if !dir.join(".git").exists() {
@@ -307,11 +345,12 @@ impl Workspace {
                 return Err(err(format!("refusing base branch {from}")));
             }
             let base = format!("origin/{from}");
-            self.check_start_point(&repo_dir, &base, repo.label())?;
+            self.check_start_point(&repo_dir, &base, repo.label())
+                .await?;
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(dir.parent().unwrap_or(Path::new(".")))
                 .map_err(|e| err(e.to_string()))?;
-            let _ = git(&repo_dir, &["worktree", "prune"]);
+            let _ = git(&repo_dir, &["worktree", "prune"]).await;
             git(
                 &repo_dir,
                 &[
@@ -321,7 +360,8 @@ impl Workspace {
                     &dir.display().to_string(),
                     &base,
                 ],
-            )?;
+            )
+            .await?;
         }
         // Touch the folder so pruning sees the thread as used.
         if let Ok(f) = std::fs::File::open(&dir) {
@@ -330,7 +370,8 @@ impl Workspace {
         let refs = git(
             &dir,
             &["branch", "-r", "--points-at", "HEAD", "--format=%(refname)"],
-        )?;
+        )
+        .await?;
         let branches = refs
             .lines()
             .filter_map(|r| r.strip_prefix("refs/remotes/"))
@@ -338,19 +379,19 @@ impl Workspace {
             .map(str::to_string)
             .collect();
         Ok(ChatWorktree {
-            commit: git(&dir, &["rev-parse", "HEAD"])?,
+            commit: git(&dir, &["rev-parse", "HEAD"]).await?,
             dir,
             branches,
         })
     }
 
     /// The folder of another worktree of this clone that has `branch` checked out, or None.
-    pub fn worktree_holding(
+    pub async fn worktree_holding(
         &self,
         repo_dir: &Path,
         branch: &str,
     ) -> Result<Option<PathBuf>, GitError> {
-        let list = git(repo_dir, &["worktree", "list", "--porcelain"])?;
+        let list = git(repo_dir, &["worktree", "list", "--porcelain"]).await?;
         let wanted = format!("branch refs/heads/{branch}");
         for block in list.split("\n\n") {
             let dir = block.lines().find_map(|l| l.strip_prefix("worktree "));
@@ -365,8 +406,9 @@ impl Workspace {
     }
 
     /// The identity commits use: the user's own when git has one, else a placeholder, so a commit cannot fail for want of one.
-    fn identity_args(dir: &Path) -> Vec<&'static str> {
+    async fn identity_args(dir: &Path) -> Vec<&'static str> {
         let known = git(dir, &["config", "user.email"])
+            .await
             .map(|e| !e.is_empty())
             .unwrap_or(false);
         if known {
@@ -382,29 +424,33 @@ impl Workspace {
     }
 
     /// Commit what the agent left uncommitted, so nothing is lost when the worktree goes. False when there was nothing.
-    pub fn commit_leftovers(&self, dir: &Path, message: &str) -> Result<bool, GitError> {
-        if git(dir, &["status", "--porcelain"])?.is_empty() {
+    pub async fn commit_leftovers(&self, dir: &Path, message: &str) -> Result<bool, GitError> {
+        if git(dir, &["status", "--porcelain"]).await?.is_empty() {
             return Ok(false);
         }
-        git(dir, &["add", "-A"])?;
-        let mut args: Vec<&str> = Self::identity_args(dir);
+        git(dir, &["add", "-A"]).await?;
+        let mut args: Vec<&str> = Self::identity_args(dir).await;
         args.extend(["commit", "-m", message]);
-        git(dir, &args)?;
+        git(dir, &args).await?;
         Ok(true)
     }
 
     /// A continuation brings its base in first, so the agent works on what has landed since (the agent itself may not merge or fetch).
-    pub fn sync_base(&self, dir: &Path, base: &str) -> Result<SyncResult, GitError> {
-        if git(dir, &["merge-base", "--is-ancestor", base, "HEAD"]).is_ok() {
+    pub async fn sync_base(&self, dir: &Path, base: &str) -> Result<SyncResult, GitError> {
+        if git(dir, &["merge-base", "--is-ancestor", base, "HEAD"])
+            .await
+            .is_ok()
+        {
             return Ok(SyncResult::Current);
         }
-        let mut args: Vec<&str> = Self::identity_args(dir);
+        let mut args: Vec<&str> = Self::identity_args(dir).await;
         args.extend(["merge", "--no-edit", base]);
-        match git(dir, &args) {
+        match git(dir, &args).await {
             Ok(_) => Ok(SyncResult::Merged),
             Err(_) => {
-                let files =
-                    git(dir, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
+                let files = git(dir, &["diff", "--name-only", "--diff-filter=U"])
+                    .await
+                    .unwrap_or_default();
                 Ok(SyncResult::Conflicts(
                     files
                         .lines()
@@ -417,17 +463,18 @@ impl Workspace {
     }
 
     /// The commit the worktree is on.
-    pub fn head(&self, dir: &Path) -> Result<String, GitError> {
-        git(dir, &["rev-parse", "HEAD"])
+    pub async fn head(&self, dir: &Path) -> Result<String, GitError> {
+        git(dir, &["rev-parse", "HEAD"]).await
     }
 
-    pub fn summary(&self, dir: &Path, base: &str) -> Result<Summary, GitError> {
-        let ahead: u64 = git(dir, &["rev-list", "--count", &format!("{base}..HEAD")])?
+    pub async fn summary(&self, dir: &Path, base: &str) -> Result<Summary, GitError> {
+        let ahead: u64 = git(dir, &["rev-list", "--count", &format!("{base}..HEAD")])
+            .await?
             .parse()
             .unwrap_or(0);
-        let commit = git(dir, &["rev-parse", "HEAD"])?;
+        let commit = git(dir, &["rev-parse", "HEAD"]).await?;
         let stat = if ahead > 0 {
-            git(dir, &["diff", "--shortstat", &format!("{base}...HEAD")])?
+            git(dir, &["diff", "--shortstat", &format!("{base}...HEAD")]).await?
         } else {
             String::new()
         };
@@ -446,7 +493,7 @@ impl Workspace {
         })
     }
 
-    pub fn push(&self, dir: &Path, branch: &str) -> Result<(), GitError> {
+    pub async fn push(&self, dir: &Path, branch: &str) -> Result<(), GitError> {
         git(
             dir,
             &[
@@ -456,10 +503,11 @@ impl Workspace {
                 &format!("HEAD:refs/heads/{branch}"),
             ],
         )
+        .await
         .map(|_| ())
     }
 
-    pub fn remove_worktree(
+    pub async fn remove_worktree(
         &self,
         repository_id: &str,
         job_id: &str,
@@ -471,17 +519,18 @@ impl Workspace {
             &repo_dir,
             &["worktree", "remove", "--force", &dir.display().to_string()],
         )
+        .await
         .is_err()
         {
             let _ = std::fs::remove_dir_all(&dir);
-            let _ = git(&repo_dir, &["worktree", "prune"]);
+            let _ = git(&repo_dir, &["worktree", "prune"]).await;
         }
         Ok(())
     }
 
     /// Remove worktrees kept from failed runs once they are older than `hours`, and chat worktrees unused for `chat_hours`.
     /// Returns what could not be removed, for the log.
-    pub fn prune_old(&self, hours: u64, chat_hours: u64) -> Vec<String> {
+    pub async fn prune_old(&self, hours: u64, chat_hours: u64) -> Vec<String> {
         let mut problems = vec![];
         let now = SystemTime::now();
         for (root, age) in [
@@ -506,7 +555,7 @@ impl Workspace {
                         continue;
                     }
                     let id = entry.file_name().to_string_lossy().to_string();
-                    if let Err(e) = self.remove_worktree(&repo, &id, &root) {
+                    if let Err(e) = self.remove_worktree(&repo, &id, &root).await {
                         problems.push(format!("could not prune worktree {repo}/{id}: {e}"));
                     }
                 }
@@ -520,6 +569,7 @@ impl Workspace {
 mod tests {
     use super::*;
     use std::fs;
+    use std::process::Command;
 
     const REPO: &str = "33333333-3333-3333-3333-333333333333";
     const JOB: &str = "44444444-4444-4444-4444-444444444444";
@@ -616,35 +666,46 @@ mod tests {
         }
     }
 
-    #[test]
-    fn clone_once_worktree_on_the_jobs_branch_commit_what_was_left_push_and_remove() {
+    #[tokio::test]
+    async fn clone_once_worktree_on_the_jobs_branch_commit_what_was_left_push_and_remove() {
         let f = Fixture::new("basic");
         let repo = f.repo();
         let mut phases = vec![];
         f.ws.ensure_clone(&repo, |p, _| phases.push(p.to_string()))
+            .await
             .unwrap();
         f.ws.ensure_clone(&repo, |p, _| phases.push(p.to_string()))
+            .await
             .unwrap();
         assert_eq!(phases, ["cloning", "fetching"]);
         assert_eq!(f.ws.held(), [REPO]);
 
         let wt =
             f.ws.create_worktree(&repo, JOB, "wh/WH-1-readme", None)
+                .await
                 .unwrap();
         assert_eq!(wt.base, "origin/main");
         assert_eq!(g(&wt.dir, &["branch", "--show-current"]), "wh/WH-1-readme");
-        assert_eq!(f.ws.summary(&wt.dir, &wt.base).unwrap().ahead, 0);
+        assert_eq!(f.ws.summary(&wt.dir, &wt.base).await.unwrap().ahead, 0);
 
         fs::write(wt.dir.join("README.md"), "hello\nmore\n").unwrap();
         fs::write(wt.dir.join("new.txt"), "x\n").unwrap();
-        assert!(f.ws.commit_leftovers(&wt.dir, "WH-1: leftovers").unwrap());
-        assert!(!f.ws.commit_leftovers(&wt.dir, "WH-1: nothing").unwrap());
-        let sum = f.ws.summary(&wt.dir, &wt.base).unwrap();
+        assert!(f
+            .ws
+            .commit_leftovers(&wt.dir, "WH-1: leftovers")
+            .await
+            .unwrap());
+        assert!(!f
+            .ws
+            .commit_leftovers(&wt.dir, "WH-1: nothing")
+            .await
+            .unwrap());
+        let sum = f.ws.summary(&wt.dir, &wt.base).await.unwrap();
         assert_eq!(sum.ahead, 1);
         assert_eq!((sum.files, sum.insertions, sum.deletions), (2, 2, 0));
-        assert_eq!(f.ws.head(&wt.dir).unwrap(), sum.commit);
+        assert_eq!(f.ws.head(&wt.dir).await.unwrap(), sum.commit);
 
-        f.ws.push(&wt.dir, "wh/WH-1-readme").unwrap();
+        f.ws.push(&wt.dir, "wh/WH-1-readme").await.unwrap();
         assert_eq!(
             g(&f.origin, &["rev-parse", "refs/heads/wh/WH-1-readme"]),
             sum.commit
@@ -655,129 +716,156 @@ mod tests {
             "main is untouched"
         );
         f.ws.remove_worktree(REPO, JOB, &f.ws.paths.worktrees.clone())
+            .await
             .unwrap();
         assert!(!wt.dir.exists());
     }
 
-    #[test]
-    fn a_worktree_can_start_from_another_branch_and_a_missing_one_is_a_clear_error() {
+    #[tokio::test]
+    async fn a_worktree_can_start_from_another_branch_and_a_missing_one_is_a_clear_error() {
         let f = Fixture::new("base");
         let repo = f.repo();
         g(&f.seed, &["checkout", "-q", "-b", "staging"]);
         f.land("STAGING.md", "only on staging\n", "staging", "staging");
-        f.ws.ensure_clone(&repo, |_, _| {}).unwrap();
+        f.ws.ensure_clone(&repo, |_, _| {}).await.unwrap();
         let job = "55555555-5555-5555-5555-555555555555";
         let wt =
             f.ws.create_worktree(&repo, job, "wh/WH-2-x", Some("staging"))
+                .await
                 .unwrap();
         assert_eq!(wt.base, "origin/staging");
         assert!(wt.dir.join("STAGING.md").exists());
         f.ws.remove_worktree(REPO, job, &f.ws.paths.worktrees.clone())
+            .await
             .unwrap();
         let e =
             f.ws.create_worktree(&repo, job, "wh/WH-2-y", Some("nope"))
+                .await
                 .unwrap_err();
         assert!(e.0.contains("does not exist"), "{e}");
         let e =
             f.ws.create_worktree(&repo, job, "wh/WH-2-z", Some("../x"))
+                .await
                 .unwrap_err();
         assert!(e.0.contains("refusing base"), "{e}");
     }
 
-    #[test]
-    fn a_continuation_starts_from_the_jobs_own_pushed_branch_and_counts_only_what_it_adds() {
+    #[tokio::test]
+    async fn a_continuation_starts_from_the_jobs_own_pushed_branch_and_counts_only_what_it_adds() {
         let f = Fixture::new("cont");
         let repo = f.repo();
-        f.ws.ensure_clone(&repo, |_, _| {}).unwrap();
+        f.ws.ensure_clone(&repo, |_, _| {}).await.unwrap();
         let first = "66666666-6666-6666-6666-666666666666";
         let a =
             f.ws.create_worktree(&repo, first, "wh/WH-3-cont", Some("main"))
+                .await
                 .unwrap();
         fs::write(a.dir.join("one.txt"), "1\n").unwrap();
-        f.ws.commit_leftovers(&a.dir, "WH-3: one").unwrap();
-        f.ws.push(&a.dir, "wh/WH-3-cont").unwrap();
+        f.ws.commit_leftovers(&a.dir, "WH-3: one").await.unwrap();
+        f.ws.push(&a.dir, "wh/WH-3-cont").await.unwrap();
         f.ws.remove_worktree(REPO, first, &f.ws.paths.worktrees.clone())
+            .await
             .unwrap();
-        f.ws.ensure_clone(&repo, |_, _| {}).unwrap();
+        f.ws.ensure_clone(&repo, |_, _| {}).await.unwrap();
 
         let second = "77777777-7777-7777-7777-777777777777";
         let b =
             f.ws.create_worktree(&repo, second, "wh/WH-3-cont", Some("wh/WH-3-cont"))
+                .await
                 .unwrap();
         assert_eq!(b.base, "origin/wh/WH-3-cont");
         assert!(
             b.dir.join("one.txt").exists(),
             "the earlier run's work is there"
         );
-        assert_eq!(f.ws.summary(&b.dir, &b.base).unwrap().ahead, 0);
+        assert_eq!(f.ws.summary(&b.dir, &b.base).await.unwrap().ahead, 0);
         fs::write(b.dir.join("two.txt"), "2\n").unwrap();
-        f.ws.commit_leftovers(&b.dir, "WH-3: two").unwrap();
-        let sum = f.ws.summary(&b.dir, &b.base).unwrap();
+        f.ws.commit_leftovers(&b.dir, "WH-3: two").await.unwrap();
+        let sum = f.ws.summary(&b.dir, &b.base).await.unwrap();
         assert_eq!(
             (sum.ahead, sum.files),
             (1, 1),
             "only this run's commit counts"
         );
-        f.ws.push(&b.dir, "wh/WH-3-cont").unwrap();
+        f.ws.push(&b.dir, "wh/WH-3-cont").await.unwrap();
         assert_eq!(
             g(&f.origin, &["rev-list", "--count", "main..wh/WH-3-cont"]),
             "2"
         );
         f.ws.remove_worktree(REPO, second, &f.ws.paths.worktrees.clone())
+            .await
             .unwrap();
     }
 
-    #[test]
-    fn a_continuation_brings_in_what_landed_on_its_base_and_a_conflict_is_left_for_the_agent() {
+    #[tokio::test]
+    async fn a_continuation_brings_in_what_landed_on_its_base_and_a_conflict_is_left_for_the_agent()
+    {
         let f = Fixture::new("sync");
         let repo = f.repo();
-        f.ws.ensure_clone(&repo, |_, _| {}).unwrap();
+        f.ws.ensure_clone(&repo, |_, _| {}).await.unwrap();
         let job = "88888888-8888-8888-8888-888888888888";
         let wt =
             f.ws.create_worktree(&repo, job, "wh/WH-4-sync", Some("main"))
+                .await
                 .unwrap();
         assert_eq!(
-            f.ws.sync_base(&wt.dir, "origin/main").unwrap(),
+            f.ws.sync_base(&wt.dir, "origin/main").await.unwrap(),
             SyncResult::Current
         );
 
         f.land("landed.txt", "from main\n", "landed", "main");
-        f.ws.ensure_clone(&repo, |_, _| {}).unwrap();
+        f.ws.ensure_clone(&repo, |_, _| {}).await.unwrap();
         assert_eq!(
-            f.ws.sync_base(&wt.dir, "origin/main").unwrap(),
+            f.ws.sync_base(&wt.dir, "origin/main").await.unwrap(),
             SyncResult::Merged
         );
         assert!(wt.dir.join("landed.txt").exists());
 
         fs::write(wt.dir.join("landed.txt"), "from the branch\n").unwrap();
-        f.ws.commit_leftovers(&wt.dir, "WH-4: mine").unwrap();
+        f.ws.commit_leftovers(&wt.dir, "WH-4: mine").await.unwrap();
         f.land("landed.txt", "changed on main\n", "again", "main");
-        f.ws.ensure_clone(&repo, |_, _| {}).unwrap();
+        f.ws.ensure_clone(&repo, |_, _| {}).await.unwrap();
         assert_eq!(
-            f.ws.sync_base(&wt.dir, "origin/main").unwrap(),
+            f.ws.sync_base(&wt.dir, "origin/main").await.unwrap(),
             SyncResult::Conflicts(vec!["landed.txt".into()])
         );
         assert!(fs::read_to_string(wt.dir.join("landed.txt"))
             .unwrap()
             .contains("<<<<<<<"));
         f.ws.remove_worktree(REPO, job, &f.ws.paths.worktrees.clone())
+            .await
             .unwrap();
     }
 
-    #[test]
-    fn a_branch_name_that_is_not_the_jobs_shape_is_refused() {
+    #[tokio::test]
+    async fn two_first_clones_of_one_repository_at_once_run_one_at_a_time() {
+        // Without the per-repository lock both would clone into the same temporary folder and one would fail.
+        let f = Fixture::new("lock");
+        let repo = f.repo();
+        let (a, b) = tokio::join!(
+            f.ws.ensure_clone(&repo, |_, _| {}),
+            f.ws.ensure_clone(&repo, |_, _| {})
+        );
+        assert_eq!(a.unwrap(), b.unwrap());
+        assert_eq!(f.ws.held(), [REPO]);
+    }
+
+    #[tokio::test]
+    async fn a_branch_name_that_is_not_the_jobs_shape_is_refused() {
         let f = Fixture::new("names");
         let repo = f.repo();
-        f.ws.ensure_clone(&repo, |_, _| {}).unwrap();
+        f.ws.ensure_clone(&repo, |_, _| {}).await.unwrap();
         assert!(f
             .ws
             .create_worktree(&repo, JOB, "main", None)
+            .await
             .unwrap_err()
             .0
             .contains("refusing branch"));
         assert!(f
             .ws
             .create_worktree(&repo, JOB, "wh/../../etc", None)
+            .await
             .unwrap_err()
             .0
             .contains("refusing branch"));
@@ -789,19 +877,22 @@ mod tests {
             .contains("bad repository id"));
     }
 
-    #[test]
-    fn continuing_a_stopped_run_whose_worktree_still_holds_the_branch_picks_up_its_leftovers() {
+    #[tokio::test]
+    async fn continuing_a_stopped_run_whose_worktree_still_holds_the_branch_picks_up_its_leftovers()
+    {
         let f = Fixture::new("stopped");
         let repo = f.repo();
-        f.ws.ensure_clone(&repo, |_, _| {}).unwrap();
+        f.ws.ensure_clone(&repo, |_, _| {}).await.unwrap();
         let first = "77777777-7777-7777-7777-777777777777";
         let second = "88888888-8888-8888-8888-888888888888";
         let a =
             f.ws.create_worktree(&repo, first, "wh/WH-4-stopped", Some("main"))
+                .await
                 .unwrap();
         fs::write(a.dir.join("half.txt"), "half done\n").unwrap();
         let b =
             f.ws.create_worktree(&repo, second, "wh/WH-4-stopped", Some("main"))
+                .await
                 .unwrap();
         assert!(!a.dir.exists(), "the stopped run's worktree is gone");
         assert_eq!(
@@ -809,16 +900,17 @@ mod tests {
             "half done\n"
         );
         f.ws.remove_worktree(REPO, second, &f.ws.paths.worktrees.clone())
+            .await
             .unwrap();
     }
 
-    #[test]
-    fn a_chat_worktree_is_detached_reused_for_the_thread_and_stays_where_the_chat_moved_it() {
+    #[tokio::test]
+    async fn a_chat_worktree_is_detached_reused_for_the_thread_and_stays_where_the_chat_moved_it() {
         let f = Fixture::new("chat");
         let repo = f.repo();
         let thread = "99999999-9999-9999-9999-999999999999";
-        f.ws.ensure_clone(&repo, |_, _| {}).unwrap();
-        let a = f.ws.chat_worktree(&repo, thread).unwrap();
+        f.ws.ensure_clone(&repo, |_, _| {}).await.unwrap();
+        let a = f.ws.chat_worktree(&repo, thread).await.unwrap();
         assert_eq!(a.dir, f.ws.paths.chats.join(REPO).join(thread));
         assert_eq!(
             g(&a.dir, &["branch", "--show-current"]),
@@ -829,13 +921,13 @@ mod tests {
         assert_eq!(a.branches, ["origin/main"]);
 
         f.land("later.md", "later\n", "later", "main");
-        f.ws.ensure_clone(&repo, |_, _| {}).unwrap();
-        let b = f.ws.chat_worktree(&repo, thread).unwrap();
+        f.ws.ensure_clone(&repo, |_, _| {}).await.unwrap();
+        let b = f.ws.chat_worktree(&repo, thread).await.unwrap();
         assert_eq!(b.dir, a.dir, "the same folder");
         assert_eq!(b.commit, a.commit, "not moved by the daemon");
         assert!(b.branches.is_empty(), "no longer the tip of main");
         g(&b.dir, &["checkout", "-q", "--detach", "origin/main"]);
-        let c = f.ws.chat_worktree(&repo, thread).unwrap();
+        let c = f.ws.chat_worktree(&repo, thread).await.unwrap();
         assert_eq!(c.commit, g(&f.origin, &["rev-parse", "refs/heads/main"]));
         assert_eq!(c.branches, ["origin/main"]);
         assert!(c.dir.join("later.md").exists());
@@ -845,32 +937,33 @@ mod tests {
         assert!(f
             .ws
             .chat_worktree(&stale, "88888888-8888-8888-8888-888888888888")
+            .await
             .unwrap_err()
             .0
             .contains("does not exist"));
     }
 
-    #[test]
-    fn pruning_removes_chat_worktrees_unused_for_a_day_and_keeps_the_recent_ones() {
+    #[tokio::test]
+    async fn pruning_removes_chat_worktrees_unused_for_a_day_and_keeps_the_recent_ones() {
         let f = Fixture::new("prune");
         let repo = f.repo();
         let old = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
         let fresh = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
-        f.ws.ensure_clone(&repo, |_, _| {}).unwrap();
-        let a = f.ws.chat_worktree(&repo, old).unwrap();
-        let b = f.ws.chat_worktree(&repo, fresh).unwrap();
+        f.ws.ensure_clone(&repo, |_, _| {}).await.unwrap();
+        let a = f.ws.chat_worktree(&repo, old).await.unwrap();
+        let b = f.ws.chat_worktree(&repo, fresh).await.unwrap();
         let two_days = SystemTime::now() - std::time::Duration::from_secs(48 * 3600);
         fs::File::open(&a.dir)
             .unwrap()
             .set_modified(two_days)
             .unwrap();
-        assert!(f.ws.prune_old(24, 24).is_empty());
+        assert!(f.ws.prune_old(24, 24).await.is_empty());
         assert!(!a.dir.exists());
         assert!(b.dir.exists());
     }
 
-    #[test]
-    fn json_helpers_for_the_repo_shape_are_consistent() {
+    #[tokio::test]
+    async fn json_helpers_for_the_repo_shape_are_consistent() {
         let repo = RepoRef {
             id: REPO.into(),
             name: "app".into(),
