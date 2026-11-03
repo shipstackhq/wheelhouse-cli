@@ -3,6 +3,11 @@
 Every test case in `daemon/test` and `cli/test`, with the Rust test that replaces it. Fill the right column as work lands
 (`crate::module::test_name`); `-` means not ported yet. Do not delete a row: if a case no longer applies, write `n/a: <why>`.
 
+## Decisions that shape the port
+
+- **HTTP and SSE stack: async `tokio` + `reqwest`** (rustls, platform verifier). Wheelhouse decision #1, accepted. The daemon runs on consumer machines and server-grade VMs and orchestrates many parallel flows, so async is the default. The ureq + threads spike is kept for reference and is not part of the product.
+- Binary size trade-off: the tokio + reqwest spike is about 235 KB larger than the ureq spike (1,587,136 B vs 1,353,536 B, macOS arm64, release). Size budgets follow CI measurements on all three targets.
+
 ## daemon/test/crypto.test.mjs
 | Node test | Rust counterpart |
 |---|---|
