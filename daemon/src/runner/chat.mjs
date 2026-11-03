@@ -50,7 +50,7 @@ export function chatArgs(message, checkout, mcpConfig) {
     "--tools",
     "Read,Grep,Glob,Bash",
     "--permission-mode",
-    "manual",
+    "dontAsk",
     "--permission-prompts",
     "none",
     "--allowedTools",
