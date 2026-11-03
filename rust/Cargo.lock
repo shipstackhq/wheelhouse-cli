@@ -1699,7 +1699,9 @@ dependencies = [
  "regex",
  "reqwest",
  "serde_json",
+ "tempfile",
  "tokio",
+ "wh-platform",
  "wh-proto",
 ]
 
