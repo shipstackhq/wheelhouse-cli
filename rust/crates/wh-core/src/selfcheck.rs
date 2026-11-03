@@ -101,7 +101,11 @@ fn last_chars(s: &str, n: usize) -> &str {
 
 /// How a shell command ended.
 pub enum Ended {
-    Exited { code: Option<i32>, output: String },
+    Exited {
+        code: Option<i32>,
+        output: String,
+        stderr: String,
+    },
     TimedOut,
     Stopped,
     CouldNotStart(String),
@@ -130,6 +134,7 @@ pub async fn run_shell(cwd: &Path, command: &str, cancel: &Cancel, timeout: Dura
             Ok(Ok(o)) => Ended::Exited {
                 code: o.status.code(),
                 output: format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)),
+                stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
             },
         },
         _ = cancel.cancelled() => Ended::Stopped,
@@ -195,13 +200,15 @@ pub async fn run_check(check: &Check, dir: &Path, cancel: &Cancel, home: &str) -
         Ended::Exited {
             code: Some(0),
             output,
+            ..
         } => result(Status::Passed, Some(0), &output),
         // 127 and 126: the shell could not find or execute the command.
         Ended::Exited {
             code: Some(c),
             output,
+            ..
         } if c != 126 && c != 127 => result(Status::Failed, Some(c), &output),
-        Ended::Exited { code, output } => result(Status::CouldNotRun, code, &output),
+        Ended::Exited { code, output, .. } => result(Status::CouldNotRun, code, &output),
         Ended::TimedOut => result(
             Status::CouldNotRun,
             None,

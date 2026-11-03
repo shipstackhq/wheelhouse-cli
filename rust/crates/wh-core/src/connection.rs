@@ -345,6 +345,68 @@ pub fn iso_from_ms(ms: u64) -> String {
     )
 }
 
+/// `Date.parse` for the timestamps Wheelhouse sends (`2026-11-03T22:52:55.525Z`, or with a `+hh:mm` offset): milliseconds since the epoch.
+pub fn parse_iso_ms(s: &str) -> Option<u64> {
+    let b = s.as_bytes();
+    let num = |from: usize, len: usize| -> Option<i64> { s.get(from..from + len)?.parse().ok() };
+    if b.len() < 20
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || !matches!(b[10], b'T' | b't' | b' ')
+        || b[13] != b':'
+        || b[16] != b':'
+    {
+        return None;
+    }
+    let (y, m, d, hh, mm, ss) = (
+        num(0, 4)?,
+        num(5, 2)?,
+        num(8, 2)?,
+        num(11, 2)?,
+        num(14, 2)?,
+        num(17, 2)?,
+    );
+    let mut i = 19;
+    let mut milli = 0i64;
+    if b.get(i) == Some(&b'.') {
+        let digits: String = s[i + 1..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if digits.is_empty() {
+            return None;
+        }
+        milli = format!("{:0<3}", &digits[..digits.len().min(3)])
+            .parse()
+            .ok()?;
+        i += 1 + digits.len();
+    }
+    let offset_min = match s.get(i..)? {
+        "Z" | "z" => 0,
+        t if t.len() == 6 && (t.starts_with('+') || t.starts_with('-')) && &t[3..4] == ":" => {
+            let v = t[1..3].parse::<i64>().ok()? * 60 + t[4..6].parse::<i64>().ok()?;
+            if t.starts_with('-') {
+                -v
+            } else {
+                v
+            }
+        }
+        _ => return None,
+    };
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || hh > 24 || mm > 59 || ss > 59 {
+        return None;
+    }
+    // Days since 1970-01-01 from a civil date (Howard Hinnant's algorithm).
+    let y2 = y - i64::from(m <= 2);
+    let era = y2.div_euclid(400);
+    let yoe = y2.rem_euclid(400);
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let ms = ((days * 24 + hh) * 60 + mm - offset_min) * 60_000 + ss * 1000 + milli;
+    u64::try_from(ms).ok()
+}
+
 #[derive(Debug, Clone)]
 pub struct ReporterConfig {
     pub flush: Duration,
@@ -914,6 +976,23 @@ mod tests {
                 retry: true
             }
         );
+    }
+
+    #[test]
+    fn timestamps_parse_back_and_offsets_are_honoured() {
+        for ms in [0u64, 951_782_400_000, 1_762_210_375_525, 4_102_444_800_123] {
+            assert_eq!(parse_iso_ms(&iso_from_ms(ms)), Some(ms));
+        }
+        assert_eq!(
+            parse_iso_ms("2030-01-01T02:00:00+02:00"),
+            parse_iso_ms("2030-01-01T00:00:00Z")
+        );
+        assert_eq!(
+            parse_iso_ms("2030-01-01T00:00:00Z"),
+            Some(1_893_456_000_000)
+        );
+        assert_eq!(parse_iso_ms("not a date"), None);
+        assert_eq!(parse_iso_ms("2030-13-01T00:00:00Z"), None);
     }
 
     #[test]

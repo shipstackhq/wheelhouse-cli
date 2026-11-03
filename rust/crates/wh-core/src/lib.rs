@@ -10,4 +10,5 @@ pub mod keystore;
 pub mod runner;
 pub mod selfcheck;
 pub mod state;
+pub mod supervisor;
 pub mod workspace;

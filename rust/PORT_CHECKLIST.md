@@ -69,31 +69,31 @@ Every test case in `daemon/test` and `cli/test`, with the Rust test that replace
 ## daemon/test/supervisor.test.mjs
 | Node test | Rust counterpart |
 |---|---|
-| a verified offer is accepted, run, and finished with what the run reported | - |
-| a run's learnings go with its finish | - |
-| a review commits nothing and pushes nothing, and still finishes with what it said | - |
-| unverifiable messages are dropped without a word to the server | - |
-| never more than the pool size at once; the next offer is refused for want of a slot | - |
-| a settings message changes the pool size | - |
-| a signed cancel stops the run; it is reported canceled, and the work still pushed | - |
-| a failing step fails the job with the reason, and frees the slot | - |
-| a run that hits the usage limit pauses new offers | - |
-| a Stop from Wheelhouse says it was requested; the daemon going down says that instead | - |
-| shutdown cancels what is running and waits for it to report | - |
-| a run whose branch a newer run took over stops without committing or pushing, and keeps its worktree | - |
-| a finish that cannot get through is kept with the job and listed with it until it is sent | - |
-| a finish Wheelhouse refuses for good is not kept | - |
-| a verified chat message is run in its own pool, streamed, and finished with the answer and session | - |
-| chat messages are verified like offers, and an expired one is dropped | - |
-| the chat pool is two, apart from jobs: a third message fails cleanly, and jobs still run | - |
-| a signed chat.cancel stops the run, reported canceled | - |
-| a malformed chat message fails with a reason; one with no id is dropped | - |
-| a chat run that fails on the usage limit pauses jobs and chats; an answer that merely mentions it does not | - |
-| a failing worktree fails the message with the reason | - |
-| shutdown cancels running chats and waits for them to report | - |
-| a check that keeps failing goes back to the agent twice, then fails the run naming it; the finish lists every check | - |
-| a fix that makes the checks pass lets the run succeed | - |
-| a check that cannot run is reported as such, is not retried, and fails the run; an optional one does not | - |
+| a verified offer is accepted, run, and finished with what the run reported | wh-core `supervisor::tests::a_verified_offer_is_accepted_run_and_finished_with_what_the_run_reported` |
+| a run's learnings go with its finish | wh-core `supervisor::tests::a_runs_learnings_go_with_its_finish` |
+| a review commits nothing and pushes nothing, and still finishes with what it said | wh-core `supervisor::tests::a_review_commits_nothing_and_pushes_nothing_and_still_finishes_with_what_it_said` |
+| unverifiable messages are dropped without a word to the server | wh-core `supervisor::tests::unverifiable_messages_are_dropped_without_a_word_to_the_server` |
+| never more than the pool size at once; the next offer is refused for want of a slot | wh-core `supervisor::tests::never_more_than_the_pool_size_at_once_the_next_offer_is_refused_for_want_of_a_slot` |
+| a settings message changes the pool size | wh-core `supervisor::tests::a_settings_message_changes_the_pool_size` |
+| a signed cancel stops the run; it is reported canceled, and the work still pushed | wh-core `supervisor::tests::a_signed_cancel_stops_the_run_it_is_reported_canceled_and_the_work_still_pushed` |
+| a failing step fails the job with the reason, and frees the slot | wh-core `supervisor::tests::a_failing_step_fails_the_job_with_the_reason_and_frees_the_slot` |
+| a run that hits the usage limit pauses new offers | wh-core `supervisor::tests::a_run_that_hits_the_usage_limit_pauses_new_offers` |
+| a Stop from Wheelhouse says it was requested; the daemon going down says that instead | wh-core `supervisor::tests::a_stop_from_wheelhouse_says_it_was_requested_the_daemon_going_down_says_that_instead` |
+| shutdown cancels what is running and waits for it to report | wh-core `supervisor::tests::shutdown_cancels_what_is_running_and_waits_for_it_to_report` |
+| a run whose branch a newer run took over stops without committing or pushing, and keeps its worktree | wh-core `supervisor::tests::a_run_whose_branch_a_newer_run_took_over_stops_without_committing_or_pushing_and_keeps_its_worktree` |
+| a finish that cannot get through is kept with the job and listed with it until it is sent | wh-core `supervisor::tests::a_finish_that_cannot_get_through_is_kept_with_the_job_and_listed_with_it_until_it_is_sent` |
+| a finish Wheelhouse refuses for good is not kept | wh-core `supervisor::tests::a_finish_wheelhouse_refuses_for_good_is_not_kept` |
+| a verified chat message is run in its own pool, streamed, and finished with the answer and session | wh-core `supervisor::tests::a_verified_chat_message_is_run_in_its_own_pool_streamed_and_finished_with_the_answer_and_session` |
+| chat messages are verified like offers, and an expired one is dropped | wh-core `supervisor::tests::chat_messages_are_verified_like_offers_and_an_expired_one_is_dropped` |
+| the chat pool is two, apart from jobs: a third message fails cleanly, and jobs still run | wh-core `supervisor::tests::the_chat_pool_is_two_apart_from_jobs_a_third_message_fails_cleanly_and_jobs_still_run` |
+| a signed chat.cancel stops the run, reported canceled | wh-core `supervisor::tests::a_signed_chat_cancel_stops_the_run_reported_canceled` |
+| a malformed chat message fails with a reason; one with no id is dropped | wh-core `supervisor::tests::a_malformed_chat_message_fails_with_a_reason_one_with_no_id_is_dropped` |
+| a chat run that fails on the usage limit pauses jobs and chats; an answer that merely mentions it does not | wh-core `supervisor::tests::a_chat_run_that_fails_on_the_usage_limit_pauses_jobs_and_chats_an_answer_that_merely_mentions_it_does_not` |
+| a failing worktree fails the message with the reason | wh-core `supervisor::tests::a_failing_chat_worktree_fails_the_message_with_the_reason` |
+| shutdown cancels running chats and waits for them to report | wh-core `supervisor::tests::shutdown_cancels_running_chats_and_waits_for_them_to_report` |
+| a check that keeps failing goes back to the agent twice, then fails the run naming it; the finish lists every check | wh-core `supervisor::tests::a_check_that_keeps_failing_goes_back_to_the_agent_twice_then_fails_the_run_naming_it_the_finish_lists_every_check` |
+| a fix that makes the checks pass lets the run succeed | wh-core `supervisor::tests::a_fix_that_makes_the_checks_pass_lets_the_run_succeed` |
+| a check that cannot run is reported as such, is not retried, and fails the run; an optional one does not | wh-core `supervisor::tests::a_check_that_cannot_run_is_reported_as_such_is_not_retried_and_fails_the_run_an_optional_one_does_not` |
 
 ## daemon/test/workspace.test.mjs
 | Node test | Rust counterpart |
