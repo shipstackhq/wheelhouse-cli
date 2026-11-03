@@ -29,9 +29,9 @@ Every test case in `daemon/test` and `cli/test`, with the Rust test that replace
 ## daemon/test/connection.test.mjs
 | Node test | Rust counterpart |
 |---|---|
-| a request that is never answered is given up on instead of hanging | - |
-| a stream that goes quiet is dropped with a clear error, so the daemon reconnects | - |
-| a stream that keeps receiving keep-alives stays open, and the caller can still end it | - |
+| a request that is never answered is given up on instead of hanging | wh-core `connection::tests::a_request_that_is_never_answered_is_given_up_on_instead_of_hanging` |
+| a stream that goes quiet is dropped with a clear error, so the daemon reconnects | wh-core `connection::tests::a_stream_that_goes_quiet_is_dropped_with_a_clear_error_so_the_daemon_reconnects` |
+| a stream that keeps receiving keep-alives stays open, and the caller can still end it | wh-core `connection::tests::a_stream_that_keeps_receiving_keep_alives_stays_open_and_the_caller_can_still_end_it` (partial: keep-alives arrive in one burst, not spaced in time; the caller ends it by dropping the stream) |
 
 ## daemon/test/environment.test.mjs
 | Node test | Rust counterpart |

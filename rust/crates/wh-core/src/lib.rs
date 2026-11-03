@@ -2,6 +2,7 @@
 //! runner policy. Still to come: config files, job records, workspace git, connection, supervisor.
 
 pub mod config;
+pub mod connection;
 pub mod environment;
 pub mod runner;
 pub mod state;
