@@ -43,16 +43,16 @@ Every test case in `daemon/test` and `cli/test`, with the Rust test that replace
 ## daemon/test/runner.test.mjs
 | Node test | Rust counterpart |
 |---|---|
-| the prompt carries the issue and the rules of the run | - |
-| a continuation tells the agent about the earlier attempt and that the branch already has its commits | - |
-| the run is headless and fenced: restricted, no MCP, no hooks, prompts refused, push denied | - |
-| a run with a key reads Wheelhouse through a private MCP config file that is gone afterwards | - |
-| a delegated run uses its agent's definition, and is told to check done and ask | - |
-| an answered question is handed to the continuing run | - |
-| the offer's effort is passed to Claude, and left out when there is none | - |
-| a review reads the pull request, may not edit, and is told to give a verdict | - |
-| a delegated run is asked for learnings; LEARNING lines leave the summary and become a list | - |
-| stream-json becomes short progress events | - |
+| the prompt carries the issue and the rules of the run | wh-core `tests/runner_golden.rs::prompts_match_node` (`plain`) |
+| a continuation tells the agent about the earlier attempt and that the branch already has its commits | wh-core `tests/runner_golden.rs::prompts_match_node` (`continuation*`) |
+| the run is headless and fenced: restricted, no MCP, no hooks, prompts refused, push denied | wh-core `tests/runner_golden.rs::claude_arguments_match_node` (`plain`); the spawn-time checks come with the runner process |
+| a run with a key reads Wheelhouse through a private MCP config file that is gone afterwards | partial: `wh-core `tests/runner_golden.rs::claude_arguments_match_node` (`mcp`) covers the flags; the 0600 temp file is not ported yet |
+| a delegated run uses its agent's definition, and is told to check done and ask | wh-core `tests/runner_golden.rs::claude_arguments_match_node` (`effortAndAgent`) and `prompts_match_node` (`agent`) |
+| an answered question is handed to the continuing run | wh-core `tests/runner_golden.rs::prompts_match_node` (`continuationAnswered`) |
+| the offer's effort is passed to Claude, and left out when there is none | wh-core `tests/runner_golden.rs::claude_arguments_match_node` (`effortAndAgent`, `plain`) |
+| a review reads the pull request, may not edit, and is told to give a verdict | wh-core `tests/runner_golden.rs::prompts_match_node` (`review`) and `claude_arguments_match_node` (`review`) |
+| a delegated run is asked for learnings; LEARNING lines leave the summary and become a list | wh-core `tests/runner_golden.rs::stream_lines_match_node` (learnings) and `prompts_match_node` (`agent`) |
+| stream-json becomes short progress events | wh-core `tests/runner_golden.rs::stream_lines_match_node` |
 | runs the CLI in the worktree and reports its result | - |
 | an abort stops the agent and its children | - |
 | a missing CLI is a clear failure | - |
@@ -62,9 +62,9 @@ Every test case in `daemon/test` and `cli/test`, with the Rust test that replace
 | chat with a key: MCP config in a 0600 file (not argv), strict config kept, mcp__wheelhouse allowed, rules switch; without one, none of it | - |
 | chat rules offer Wheelhouse writes only when mcp.write is true | - |
 | write tool summaries: create_issue shows the title, comment the issue | - |
-| the MCP tool summary is short: 'wheelhouse: get_issue WH-42' | - |
+| the MCP tool summary is short: 'wheelhouse: get_issue WH-42' | wh-core `tests/runner_golden.rs::tool_summaries_match_node` (`mcp`) |
 | a keyed chat run writes the config 0600 outside cwd, keeps the token out of argv and events, and deletes it after | - |
-| scrub: paths read relative to the run's checkout, the rest of home as ~ | - |
+| scrub: paths read relative to the run's checkout, the rest of home as ~ | wh-core `tests/runner_golden.rs::scrub_matches_node` |
 
 ## daemon/test/supervisor.test.mjs
 | Node test | Rust counterpart |

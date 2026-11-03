@@ -3,9 +3,9 @@ name: rust
 on:
   push:
     branches: [main]
-    paths: ["rust/**", "daemon/src/crypto.mjs", "daemon/src/connection.mjs", ".github/workflows/rust.yml"]
+    paths: ["rust/**", "daemon/src/crypto.mjs", "daemon/src/connection.mjs", "daemon/src/config.mjs", "daemon/src/runner/claude.mjs", ".github/workflows/rust.yml"]
   pull_request:
-    paths: ["rust/**", "daemon/src/crypto.mjs", "daemon/src/connection.mjs", ".github/workflows/rust.yml"]
+    paths: ["rust/**", "daemon/src/crypto.mjs", "daemon/src/connection.mjs", "daemon/src/config.mjs", "daemon/src/runner/claude.mjs", ".github/workflows/rust.yml"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -41,6 +41,8 @@ jobs:
 
       - name: Fixtures from the Node code
         run: node tools/gen-fixtures.mjs
+      - name: Runner fixtures from the Node code
+        run: node tools/gen-runner-golden.mjs
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy

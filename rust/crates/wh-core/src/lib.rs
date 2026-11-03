@@ -1,1 +1,5 @@
-//! Placeholder: daemon logic lands here in later issues.
+//! The daemon's logic, ported from `daemon/src`. So far: the runner's pure parts (prompts, arguments, stream events) and the
+//! runner policy. Still to come: config files, job records, workspace git, connection, supervisor.
+
+pub mod config;
+pub mod runner;
