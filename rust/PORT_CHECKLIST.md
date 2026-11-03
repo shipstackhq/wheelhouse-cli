@@ -24,7 +24,7 @@ Every test case in `daemon/test` and `cli/test`, with the Rust test that replace
 ## daemon/test/config.test.mjs
 | Node test | Rust counterpart |
 |---|---|
-| only settings that differ from the defaults are saved, so new defaults reach an existing machine | - |
+| only settings that differ from the defaults are saved, so new defaults reach an existing machine | wh-core `config::file_tests::only_settings_that_differ_from_the_defaults_are_saved` (also `unknown_keys_survive_a_save`, `a_saved_runner_is_merged_over_the_defaults`) |
 
 ## daemon/test/connection.test.mjs
 | Node test | Rust counterpart |
@@ -36,9 +36,9 @@ Every test case in `daemon/test` and `cli/test`, with the Rust test that replace
 ## daemon/test/environment.test.mjs
 | Node test | Rust counterpart |
 |---|---|
-| PATH entries merge in order without duplicates | - |
-| claude is found on a PATH, by an explicit path, or not at all | - |
-| the login shell's PATH can be read, and is a real PATH | - |
+| PATH entries merge in order without duplicates | wh-core `environment::tests::path_entries_merge_in_order_without_duplicates` |
+| claude is found on a PATH, by an explicit path, or not at all | wh-core `environment::tests::claude_is_found_on_a_path_by_an_explicit_path_or_not_at_all` |
+| the login shell's PATH can be read, and is a real PATH | wh-core `environment::tests::the_login_shells_path_can_be_read_and_is_a_real_path` |
 
 ## daemon/test/runner.test.mjs
 | Node test | Rust counterpart |
