@@ -5,3 +5,4 @@ pub mod config;
 pub mod environment;
 pub mod runner;
 pub mod state;
+pub mod workspace;

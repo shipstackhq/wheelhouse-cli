@@ -98,14 +98,14 @@ Every test case in `daemon/test` and `cli/test`, with the Rust test that replace
 ## daemon/test/workspace.test.mjs
 | Node test | Rust counterpart |
 |---|---|
-| clone once, worktree on the job's branch, commit what was left, push, and remove | - |
-| a worktree can start from another branch; a missing one is a clear error | - |
-| a continuation starts from the job's own pushed branch and counts only what it adds | - |
-| a continuation brings in what landed on its base; a conflict is left for the agent | - |
-| a branch name that is not the job's shape is refused | - |
-| continuing a stopped run whose kept worktree still holds the branch: its leftovers are saved and the branch is picked up | - |
-| a chat worktree is detached, reused for the thread, and stays where the chat moved it | - |
-| pruning removes chat worktrees unused for a day and keeps the recent ones | - |
+| clone once, worktree on the job's branch, commit what was left, push, and remove | wh-core `workspace::tests::clone_once_worktree_on_the_jobs_branch_commit_what_was_left_push_and_remove` |
+| a worktree can start from another branch; a missing one is a clear error | wh-core `workspace::tests::a_worktree_can_start_from_another_branch_and_a_missing_one_is_a_clear_error` |
+| a continuation starts from the job's own pushed branch and counts only what it adds | wh-core `workspace::tests::a_continuation_starts_from_the_jobs_own_pushed_branch_and_counts_only_what_it_adds` |
+| a continuation brings in what landed on its base; a conflict is left for the agent | wh-core `workspace::tests::a_continuation_brings_in_what_landed_on_its_base_and_a_conflict_is_left_for_the_agent` |
+| a branch name that is not the job's shape is refused | wh-core `workspace::tests::a_branch_name_that_is_not_the_jobs_shape_is_refused` |
+| continuing a stopped run whose kept worktree still holds the branch: its leftovers are saved and the branch is picked up | wh-core `workspace::tests::continuing_a_stopped_run_whose_worktree_still_holds_the_branch_picks_up_its_leftovers` |
+| a chat worktree is detached, reused for the thread, and stays where the chat moved it | wh-core `workspace::tests::a_chat_worktree_is_detached_reused_for_the_thread_and_stays_where_the_chat_moved_it` |
+| pruning removes chat worktrees unused for a day and keeps the recent ones | wh-core `workspace::tests::pruning_removes_chat_worktrees_unused_for_a_day_and_keeps_the_recent_ones` |
 
 ## cli/test/board.test.mjs
 | Node test | Rust counterpart |
