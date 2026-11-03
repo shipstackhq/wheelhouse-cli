@@ -1,0 +1,6 @@
+{
+  "_comment": "Maximum release size in bytes per artifact (file name without extension). The gate fails when one is exceeded or missing. Placeholders until the first CI run reports real sizes: tighten to measured size + ~10%.",
+  "wheelhouse": 2097152,
+  "spike-tokio-reqwest": 8388608,
+  "spike-ureq-threads": 6291456
+}
