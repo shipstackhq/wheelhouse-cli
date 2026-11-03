@@ -68,18 +68,59 @@ pub fn write_string(s: &str, out: &mut String) {
     out.push('"');
 }
 
+/// The digits `s` and exponent `n` (value = 0.s × 10^n) that JS `Number::toString` prints for a positive finite `f`:
+/// the fewest digits that round-trip, and of those the one closest to `f`, with exact ties going to the even digit.
+/// Rust's `{:e}` gets the length right but rounds exact ties up, so the digits are re-rounded from the exact expansion.
+fn shortest_digits(f: f64) -> (String, i32) {
+    // Rust's `{:e}` gives the shortest round-trip digit count, like JS: "1.2345e-7", "5e0".
+    let shortest = format!("{f:e}");
+    let (mant, _) = shortest.split_once('e').expect("exponent");
+    let k = mant.chars().filter(|c| c.is_ascii_digit()).count();
+    // Every finite f64 has an exact decimal expansion of at most 767 significant digits.
+    let exact = format!("{f:.780e}");
+    let (emant, eexp) = exact.split_once('e').expect("exponent");
+    let ed: Vec<u8> = emant.bytes().filter(u8::is_ascii_digit).collect();
+    let mut e10 = eexp.parse::<i32>().expect("exponent number");
+    let mut head: Vec<u8> = ed[..k].to_vec();
+    let rest = &ed[k..];
+    let round_up = match rest[0] {
+        b'0'..=b'4' => false,
+        b'6'..=b'9' => true,
+        _ => rest[1..].iter().any(|&d| d != b'0') || (head[k - 1] - b'0') % 2 == 1,
+    };
+    if round_up {
+        let mut i = k;
+        loop {
+            if i == 0 {
+                head.insert(0, b'1');
+                head.pop();
+                e10 += 1;
+                break;
+            }
+            i -= 1;
+            if head[i] == b'9' {
+                head[i] = b'0';
+            } else {
+                head[i] += 1;
+                break;
+            }
+        }
+    }
+    let mut digits = String::from_utf8(head).expect("ascii digits");
+    while digits.len() > 1 && digits.ends_with('0') {
+        digits.pop();
+    }
+    (digits, e10 + 1)
+}
+
 /// ECMAScript `Number::toString(10)` for a finite double (`-0` is `0`).
 pub fn js_number(f: f64) -> String {
     if f == 0.0 || !f.is_finite() {
         return "0".into(); // JSON.stringify prints non-finite numbers as null, but JSON text cannot hold them
     }
     let neg = f < 0.0;
-    // Rust's `{:e}` gives the shortest digits that round-trip, like JS: "1.2345e-7", "5e0".
-    let sci = format!("{:e}", f.abs());
-    let (mant, exp) = sci.split_once('e').expect("exponent");
-    let digits: String = mant.chars().filter(|c| *c != '.').collect();
+    let (digits, n) = shortest_digits(f.abs());
     let k = digits.len() as i32;
-    let n = exp.parse::<i32>().expect("exponent number") + 1;
     let body = if k <= n && n <= 21 {
         format!("{digits}{}", "0".repeat((n - k) as usize))
     } else if 0 < n && n <= 21 {
@@ -121,6 +162,9 @@ mod tests {
             (123456789.125, "123456789.125"),
             (-2.5e25, "-2.5e+25"),
             (0.1 + 0.2, "0.30000000000000004"),
+            // Exact tie between ...422.2 and ...422.3: JS picks the even digit.
+            (-1141943753418422.2, "-1141943753418422.2"),
+            (123456789012345680000.0, "123456789012345680000"),
         ] {
             assert_eq!(js_number(f), s);
         }

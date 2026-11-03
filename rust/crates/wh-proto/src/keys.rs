@@ -2,7 +2,7 @@
 
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
-use ed25519_dalek::pkcs8::{DecodePrivateKey, EncodePrivateKey};
+use ed25519_dalek::pkcs8::DecodePrivateKey;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 
 #[derive(Debug)]
@@ -19,13 +19,22 @@ pub fn generate() -> SigningKey {
     SigningKey::generate(&mut rand::rngs::OsRng)
 }
 
+/// PKCS8 v1 DER with the 32-byte seed only, the form Node's `export({ format: "der", type: "pkcs8" })` writes.
+/// (ed25519-dalek's own encoder writes v2 with the public key, which Node reads but does not write.)
 pub fn export_private(k: &SigningKey) -> String {
-    let der = k.to_pkcs8_der().expect("pkcs8 encoding of an ed25519 key");
-    STANDARD.encode(der.as_bytes())
+    const PREFIX: [u8; 16] = [
+        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04,
+        0x20,
+    ];
+    let mut der = PREFIX.to_vec();
+    der.extend_from_slice(&k.to_bytes());
+    STANDARD.encode(der)
 }
 
 pub fn import_private(b64: &str) -> Result<SigningKey, KeyError> {
-    let der = STANDARD.decode(b64.trim()).map_err(|e| KeyError(e.to_string()))?;
+    let der = STANDARD
+        .decode(b64.trim())
+        .map_err(|e| KeyError(e.to_string()))?;
     SigningKey::from_pkcs8_der(&der).map_err(|e| KeyError(e.to_string()))
 }
 
@@ -34,8 +43,12 @@ pub fn raw_public(k: &VerifyingKey) -> String {
 }
 
 pub fn public_from_raw(raw: &str) -> Result<VerifyingKey, KeyError> {
-    let bytes = URL_SAFE_NO_PAD.decode(raw.trim_end_matches('=')).map_err(|e| KeyError(e.to_string()))?;
-    let arr: [u8; 32] = bytes.try_into().map_err(|_| KeyError("public key must be 32 bytes".into()))?;
+    let bytes = URL_SAFE_NO_PAD
+        .decode(raw.trim_end_matches('='))
+        .map_err(|e| KeyError(e.to_string()))?;
+    let arr: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| KeyError("public key must be 32 bytes".into()))?;
     VerifyingKey::from_bytes(&arr).map_err(|e| KeyError(e.to_string()))
 }
 

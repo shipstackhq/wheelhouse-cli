@@ -26,7 +26,12 @@ impl Default for SseParser {
 
 impl SseParser {
     pub fn new() -> Self {
-        SseParser { buffer: String::new(), event: "message".into(), data: vec![], id: None }
+        SseParser {
+            buffer: String::new(),
+            event: "message".into(),
+            data: vec![],
+            id: None,
+        }
     }
 
     fn reset(&mut self) {
@@ -40,11 +45,19 @@ impl SseParser {
         let mut out = vec![];
         while let Some(nl) = self.buffer.find(['\r', '\n']) {
             let line: String = self.buffer[..nl].to_string();
-            let skip = if self.buffer[nl..].starts_with("\r\n") { 2 } else { 1 };
+            let skip = if self.buffer[nl..].starts_with("\r\n") {
+                2
+            } else {
+                1
+            };
             self.buffer.drain(..nl + skip);
             if line.is_empty() {
                 if !self.data.is_empty() {
-                    out.push(SseMessage { id: self.id.clone(), event: self.event.clone(), data: self.data.join("\n") });
+                    out.push(SseMessage {
+                        id: self.id.clone(),
+                        event: self.event.clone(),
+                        data: self.data.join("\n"),
+                    });
                 }
                 self.reset();
                 continue;
@@ -75,7 +88,11 @@ mod tests {
     use super::*;
 
     fn m(id: Option<&str>, event: &str, data: &str) -> SseMessage {
-        SseMessage { id: id.map(String::from), event: event.into(), data: data.into() }
+        SseMessage {
+            id: id.map(String::from),
+            event: event.into(),
+            data: data.into(),
+        }
     }
 
     #[test]
@@ -88,7 +105,13 @@ mod tests {
             for c in chars.chunks(step) {
                 out.extend(p.push(&c.iter().collect::<String>()));
             }
-            assert_eq!(out, vec![m(Some("7"), "job.offer", "{\"a\":1}"), m(Some("8"), "settings.update", "line1\nline2")]);
+            assert_eq!(
+                out,
+                vec![
+                    m(Some("7"), "job.offer", "{\"a\":1}"),
+                    m(Some("8"), "settings.update", "line1\nline2")
+                ]
+            );
         }
     }
 

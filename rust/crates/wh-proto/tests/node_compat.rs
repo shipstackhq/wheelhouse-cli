@@ -14,7 +14,12 @@ fn root() -> PathBuf {
 
 fn fixtures() -> Value {
     let p = root().join("fixtures/crypto.json");
-    let text = std::fs::read_to_string(&p).unwrap_or_else(|_| panic!("missing {}: run `node rust/tools/gen-fixtures.mjs` first", p.display()));
+    let text = std::fs::read_to_string(&p).unwrap_or_else(|_| {
+        panic!(
+            "missing {}: run `node rust/tools/gen-fixtures.mjs` first",
+            p.display()
+        )
+    });
     serde_json::from_str(&text).unwrap()
 }
 
@@ -22,7 +27,12 @@ fn fixtures() -> Value {
 fn canonical_bytes_match_node() {
     for c in fixtures()["canonical"].as_array().unwrap() {
         let v: Value = serde_json::from_str(c["json"].as_str().unwrap()).unwrap();
-        assert_eq!(canonical_json(&v), c["canonical"].as_str().unwrap(), "input {}", c["json"]);
+        assert_eq!(
+            canonical_json(&v),
+            c["canonical"].as_str().unwrap(),
+            "input {}",
+            c["json"]
+        );
     }
 }
 
@@ -39,8 +49,14 @@ fn server_signatures_verify_and_keys_round_trip() {
         assert_eq!(sign::sign_value(&sk, &m), s["signature"].as_str().unwrap());
     }
     let dev = keys::import_private(f["device"]["privateKey"].as_str().unwrap()).unwrap();
-    assert_eq!(keys::export_private(&dev), f["device"]["privateKey"].as_str().unwrap());
-    assert_eq!(keys::raw_public(&dev.verifying_key()), f["device"]["publicKey"].as_str().unwrap());
+    assert_eq!(
+        keys::export_private(&dev),
+        f["device"]["privateKey"].as_str().unwrap()
+    );
+    assert_eq!(
+        keys::raw_public(&dev.verifying_key()),
+        f["device"]["publicKey"].as_str().unwrap()
+    );
 }
 
 #[test]
@@ -50,10 +66,20 @@ fn assertion_is_byte_identical_to_nodes() {
     let f = fixtures();
     let a = &f["assertion"];
     let node = a["value"].as_str().unwrap();
-    let claims: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(node.split('.').nth(1).unwrap()).unwrap()).unwrap();
+    let claims: Value = serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(node.split('.').nth(1).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(claims["aud"], json!(f["audience"]));
     let dev = keys::import_private(f["device"]["privateKey"].as_str().unwrap()).unwrap();
-    let mine = sign::make_assertion_with(a["deviceId"].as_str().unwrap(), &dev, a["now"].as_u64().unwrap(), claims["jti"].as_str().unwrap());
+    let mine = sign::make_assertion_with(
+        a["deviceId"].as_str().unwrap(),
+        &dev,
+        a["now"].as_u64().unwrap(),
+        claims["jti"].as_str().unwrap(),
+    );
     assert_eq!(mine, node);
 }
 
@@ -62,7 +88,9 @@ fn arb_json() -> impl Strategy<Value = Value> {
         Just(Value::Null),
         any::<bool>().prop_map(Value::Bool),
         (-9_007_199_254_740_992i64..9_007_199_254_740_992i64).prop_map(|n| json!(n)),
-        any::<f64>().prop_filter("finite", |f| f.is_finite()).prop_map(|f| json!(f)),
+        any::<f64>()
+            .prop_filter("finite", |f| f.is_finite())
+            .prop_map(|f| json!(f)),
         prop_oneof![(-1e30f64..1e30f64), (-1e-9f64..1e-9f64)].prop_map(|f| json!(f)),
         any::<String>().prop_map(Value::String),
         "[ -~\u{0}-\u{1f}\u{7f}\u{2028}\u{ffff}\u{10000}-\u{10ffff}]{0,12}".prop_map(Value::String),
@@ -70,8 +98,11 @@ fn arb_json() -> impl Strategy<Value = Value> {
     leaf.prop_recursive(4, 48, 6, |inner| {
         prop_oneof![
             prop::collection::vec(inner.clone(), 0..6).prop_map(Value::Array),
-            prop::collection::vec(("[a-zA-Z0-9\u{e9}\u{ffff}\u{10000}-\u{10010}]{0,5}", inner), 0..6)
-                .prop_map(|kv| Value::Object(kv.into_iter().collect())),
+            prop::collection::vec(
+                ("[a-zA-Z0-9\u{e9}\u{ffff}\u{10000}-\u{10010}]{0,5}", inner),
+                0..6
+            )
+            .prop_map(|kv| Value::Object(kv.into_iter().collect())),
         ]
     })
 }
@@ -89,8 +120,17 @@ fn node_canonical(docs: &[String]) -> Vec<String> {
     }
     drop(stdin);
     let out = child.wait_with_output().unwrap();
-    assert!(out.status.success());
-    String::from_utf8(out.stdout).unwrap().lines().map(String::from).collect()
+    assert!(
+        out.status.success(),
+        "node exited with {}: {}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(String::from)
+        .collect()
 }
 
 proptest! {

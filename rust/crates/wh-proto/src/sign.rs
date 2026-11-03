@@ -25,7 +25,11 @@ pub fn make_assertion_with(device_id: &str, key: &SigningKey, now_ms: u64, jti: 
         iat + 120,
         quoted(jti)
     );
-    let head = format!("{}.{}", URL_SAFE_NO_PAD.encode(header), URL_SAFE_NO_PAD.encode(claims));
+    let head = format!(
+        "{}.{}",
+        URL_SAFE_NO_PAD.encode(header),
+        URL_SAFE_NO_PAD.encode(claims)
+    );
     let sig = key.sign(head.as_bytes());
     format!("{head}.{}", URL_SAFE_NO_PAD.encode(sig.to_bytes()))
 }
@@ -42,7 +46,9 @@ pub fn verify_signed(server_key: &VerifyingKey, message: &Value, signature: &str
     let Ok(sig) = Signature::from_slice(&bytes) else {
         return false;
     };
-    server_key.verify(canonical_json(message).as_bytes(), &sig).is_ok()
+    server_key
+        .verify(canonical_json(message).as_bytes(), &sig)
+        .is_ok()
 }
 
 /// Sign the canonical form of a value (used by tests and fixtures; the server does this in production).
@@ -60,9 +66,21 @@ mod tests {
     fn sign_verify_any_key_order() {
         let k = keys::generate();
         let sig = sign_value(&k, &json!({"b": 1, "a": [1, 2]}));
-        assert!(verify_signed(&k.verifying_key(), &json!({"a": [1, 2], "b": 1}), &sig));
-        assert!(!verify_signed(&k.verifying_key(), &json!({"a": [1, 2], "b": 2}), &sig));
-        assert!(!verify_signed(&k.verifying_key(), &json!({}), "not a signature"));
+        assert!(verify_signed(
+            &k.verifying_key(),
+            &json!({"a": [1, 2], "b": 1}),
+            &sig
+        ));
+        assert!(!verify_signed(
+            &k.verifying_key(),
+            &json!({"a": [1, 2], "b": 2}),
+            &sig
+        ));
+        assert!(!verify_signed(
+            &k.verifying_key(),
+            &json!({}),
+            "not a signature"
+        ));
     }
 
     #[test]
@@ -77,6 +95,8 @@ mod tests {
             r#"{"sub":"dev-1","aud":"wheelhouse:daemon-token","iat":1700000123,"exp":1700000243,"jti":"j-1"}"#
         );
         let sig = Signature::from_slice(&URL_SAFE_NO_PAD.decode(parts[2]).unwrap()).unwrap();
-        k.verifying_key().verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &sig).unwrap();
+        k.verifying_key()
+            .verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &sig)
+            .unwrap();
     }
 }

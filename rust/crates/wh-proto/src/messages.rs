@@ -114,8 +114,16 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
-        let s: ServerMessage = serde_json::from_str(r#"{"type":"settings.update","poolSize":3,"chatModel":null}"#).unwrap();
-        assert!(matches!(s, ServerMessage::SettingsUpdate(Settings { pool_size: Some(3), .. })));
+        let s: ServerMessage =
+            serde_json::from_str(r#"{"type":"settings.update","poolSize":3,"chatModel":null}"#)
+                .unwrap();
+        assert!(matches!(
+            s,
+            ServerMessage::SettingsUpdate(Settings {
+                pool_size: Some(3),
+                ..
+            })
+        ));
         let c: ServerMessage =
             serde_json::from_str(r#"{"type":"chat.message","deviceId":"d","messageId":"m","prompt":"hi","mcp":{"write":true}}"#).unwrap();
         assert!(matches!(c, ServerMessage::ChatMessage(_)));
