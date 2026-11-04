@@ -253,11 +253,14 @@ mod tests {
             &f,
             r#"#!/bin/sh
 printf '%s\0' "$@" > args.bin
-echo '{"type":"system","subtype":"init","model":"claude-sonnet","session_id":"s1"}'
-echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Looking at the code"},{"type":"tool_use","name":"Edit","input":{"file_path":"src/a.ts"}}]}}'
+# In hang mode the child exists, and is recorded, before the line that makes a test cancel the run.
 if [ -f hang ]; then
   sleep 300 &
   echo $! > child.pid
+fi
+echo '{"type":"system","subtype":"init","model":"claude-sonnet","session_id":"s1"}'
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Looking at the code"},{"type":"tool_use","name":"Edit","input":{"file_path":"src/a.ts"}}]}}'
+if [ -f hang ]; then
   wait
 else
   echo '{"type":"result","subtype":"success","is_error":false,"num_turns":3,"total_cost_usd":0.12,"duration_ms":900,"result":"Changed a.ts"}'

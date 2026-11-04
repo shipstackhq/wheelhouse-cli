@@ -306,9 +306,17 @@ pub async fn run_daemon(opts: DaemonOptions) -> Result<Exit, String> {
     };
 
     // Only a change is logged (it stopped working, it works again), so the log shows when Wheelhouse could not hear this machine.
+    // The heartbeat can see the device was unpaired before the main loop does. It says so here before it stops the daemon, so the exit
+    // still reads as "unpaired" (a clean exit: the service stays stopped) and not as a plain stop (the service would start it again).
+    let unpaired_seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let beat = {
-        let (conn, supervisor, stop, log) =
-            (conn.clone(), supervisor.clone(), stop.clone(), log.clone());
+        let (conn, supervisor, stop, log, seen) = (
+            conn.clone(),
+            supervisor.clone(),
+            stop.clone(),
+            log.clone(),
+            unpaired_seen.clone(),
+        );
         tokio::spawn(async move {
             let mut failing = false;
             let mut tick =
@@ -329,6 +337,7 @@ pub async fn run_daemon(opts: DaemonOptions) -> Result<Exit, String> {
                     }
                     Err(e) => {
                         if e == ConnError::Unpaired {
+                            seen.store(true, std::sync::atomic::Ordering::SeqCst);
                             stop.cancel();
                         }
                         if !failing {
@@ -404,7 +413,9 @@ pub async fn run_daemon(opts: DaemonOptions) -> Result<Exit, String> {
     }
     beat.abort();
     supervisor.shutdown().await;
-    Ok(Exit { unpaired })
+    Ok(Exit {
+        unpaired: unpaired || unpaired_seen.load(std::sync::atomic::Ordering::SeqCst),
+    })
 }
 
 #[cfg(all(test, unix))]
@@ -783,6 +794,26 @@ mod tests {
             .unwrap()
             .iter()
             .any(|l| l.contains("no longer accepts this device's key")));
+    }
+
+    #[tokio::test]
+    async fn unpaired_is_reported_even_when_the_heartbeat_notices_before_the_main_loop() {
+        let server_key = wh_proto::keys::generate();
+        let (server, _) = serve(|_, _| json_response(401, "{}")).await;
+        let (_d, p) = paired(&server, &server_key);
+        // A heartbeat every millisecond races the first hello to the 401. Either way the exit must say "unpaired", so a service
+        // manager sees a clean exit and does not start the daemon again.
+        for round in 0..25 {
+            let (log, _) = quiet_log();
+            let mut o = DaemonOptions::new(p.clone(), Cancel::new(), log);
+            o.heartbeat = Duration::from_millis(1);
+            o.adopt_path = false;
+            let exit = tokio::time::timeout(Duration::from_secs(10), run_daemon(o))
+                .await
+                .expect("stops")
+                .unwrap();
+            assert_eq!(exit, Exit { unpaired: true }, "round {round}");
+        }
     }
 
     #[tokio::test]
