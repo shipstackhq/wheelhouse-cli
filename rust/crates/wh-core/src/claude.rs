@@ -13,6 +13,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 
 /// How long a stopped run gets to exit on SIGTERM before its process group is killed.
+#[cfg(unix)]
 const KILL_AFTER: Duration = Duration::from_secs(10);
 
 /// Turns one stdout line into progress events. Chat uses a stateful one.
@@ -133,8 +134,16 @@ pub async fn run_cli(mut run: CliRun) -> RunResult {
                     (run.on_event)(e);
                 }
             }
-            _ = &mut timeout, if killed.is_none() => killed = stop(pid, Stopped::Timeout),
-            _ = run.cancel.cancelled(), if killed.is_none() => killed = stop(pid, Stopped::Canceled),
+            _ = &mut timeout, if killed.is_none() => {
+                killed = stop(pid, Stopped::Timeout);
+                #[cfg(not(unix))]
+                let _ = child.start_kill();
+            }
+            _ = run.cancel.cancelled(), if killed.is_none() => {
+                killed = stop(pid, Stopped::Canceled);
+                #[cfg(not(unix))]
+                let _ = child.start_kill();
+            }
         }
     }
     let status = child.wait().await.ok();
@@ -162,6 +171,7 @@ fn stop(pid: Option<u32>, why: Stopped) -> Option<Stopped> {
             signal_group(pid, libc::SIGKILL);
         });
     }
+    // Windows has no process groups here: the caller ends the child itself (`start_kill`). Its own children are not reached yet (WH-4).
     #[cfg(not(unix))]
     let _ = pid;
     Some(why)
