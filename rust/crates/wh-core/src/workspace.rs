@@ -80,6 +80,26 @@ fn plain_branch(name: &str) -> bool {
         && !name.contains("..")
 }
 
+/// Set a folder's modified time. Windows only lets a folder be opened for this with backup semantics and write-attributes access;
+/// elsewhere an ordinary read-only open does it.
+pub(crate) fn set_dir_modified(dir: &Path, time: SystemTime) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        std::fs::OpenOptions::new()
+            .access_mode(FILE_WRITE_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(dir)?
+            .set_modified(time)
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::File::open(dir)?.set_modified(time)
+    }
+}
+
 /// The repository as Wheelhouse describes it in an offer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RepoRef {
@@ -364,9 +384,7 @@ impl Workspace {
             .await?;
         }
         // Touch the folder so pruning sees the thread as used.
-        if let Ok(f) = std::fs::File::open(&dir) {
-            let _ = f.set_modified(SystemTime::now());
-        }
+        let _ = set_dir_modified(&dir, SystemTime::now());
         let refs = git(
             &dir,
             &["branch", "-r", "--points-at", "HEAD", "--format=%(refname)"],
@@ -896,7 +914,10 @@ mod tests {
                 .unwrap();
         assert!(!a.dir.exists(), "the stopped run's worktree is gone");
         assert_eq!(
-            fs::read_to_string(b.dir.join("half.txt")).unwrap(),
+            // git may check files out with CRLF line ends on Windows
+            fs::read_to_string(b.dir.join("half.txt"))
+                .unwrap()
+                .replace("\r\n", "\n"),
             "half done\n"
         );
         f.ws.remove_worktree(REPO, second, &f.ws.paths.worktrees.clone())
@@ -953,10 +974,7 @@ mod tests {
         let a = f.ws.chat_worktree(&repo, old).await.unwrap();
         let b = f.ws.chat_worktree(&repo, fresh).await.unwrap();
         let two_days = SystemTime::now() - std::time::Duration::from_secs(48 * 3600);
-        fs::File::open(&a.dir)
-            .unwrap()
-            .set_modified(two_days)
-            .unwrap();
+        set_dir_modified(&a.dir, two_days).unwrap();
         assert!(f.ws.prune_old(24, 24).await.is_empty());
         assert!(!a.dir.exists());
         assert!(b.dir.exists());

@@ -109,14 +109,16 @@ mod tests {
 
     #[test]
     fn path_entries_merge_in_order_without_duplicates() {
+        // PATH entries are separated by ':' (';' on Windows).
+        let j = |parts: &[&str]| parts.join(&DELIM.to_string());
+        let (a, b, c) = (
+            j(&["/usr/bin", "/bin"]),
+            j(&["/opt/x", "/usr/bin"]),
+            j(&["/bin", "/y"]),
+        );
         assert_eq!(
-            merge_path(&[
-                Some("/usr/bin:/bin"),
-                Some("/opt/x:/usr/bin"),
-                None,
-                Some("/bin:/y")
-            ]),
-            "/usr/bin:/bin:/opt/x:/y"
+            merge_path(&[Some(&a), Some(&b), None, Some(&c)]),
+            j(&["/usr/bin", "/bin", "/opt/x", "/y"])
         );
     }
 
