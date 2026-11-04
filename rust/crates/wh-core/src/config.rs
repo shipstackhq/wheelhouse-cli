@@ -93,6 +93,30 @@ pub fn default_runner() -> RunnerConfig {
 }
 
 impl RunnerConfig {
+    /// From the loaded config's `runner` object; anything missing or of the wrong type keeps the default.
+    pub fn from_json(v: &Value) -> RunnerConfig {
+        let d = default_runner();
+        let list = |k: &str, fallback: Vec<String>| -> Vec<String> {
+            v[k].as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or(fallback)
+        };
+        RunnerConfig {
+            tools: list("tools", d.tools),
+            permission_mode: v["permissionMode"]
+                .as_str()
+                .map(String::from)
+                .unwrap_or(d.permission_mode),
+            allowed_tools: list("allowedTools", d.allowed_tools),
+            disallowed_tools: list("disallowedTools", d.disallowed_tools),
+            timeout_minutes: v["timeoutMinutes"].as_u64().unwrap_or(d.timeout_minutes),
+        }
+    }
+
     /// The JSON shape the Node config uses (camelCase keys), for saving and for comparing with the daemon.
     pub fn to_json(&self) -> Value {
         json!({

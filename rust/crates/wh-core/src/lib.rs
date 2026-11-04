@@ -7,6 +7,7 @@ pub mod chat;
 pub mod claude;
 pub mod config;
 pub mod connection;
+pub mod daemon;
 pub mod environment;
 pub mod keystore;
 pub mod runner;

@@ -433,7 +433,8 @@ impl<C: Poster + 'static, W: WorkspaceOps, R: Runners> Supervisor<C, W, R> {
         }
     }
 
-    fn settings(&self, m: &Value) -> &'static str {
+    /// Apply a `settings.update` message (also used for the pool size the server sends back in its hello answer).
+    pub fn settings(&self, m: &Value) -> &'static str {
         let pool = {
             let mut s = self.inner.state.lock().unwrap();
             if let Some(n) = as_integer(&m["poolSize"]).filter(|n| (1..=8).contains(n)) {

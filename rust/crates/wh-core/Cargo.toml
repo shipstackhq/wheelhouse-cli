@@ -12,6 +12,7 @@ wh-proto = { path = "../wh-proto" }
 wh-platform = { path = "../wh-platform" }
 ed25519-dalek.workspace = true
 tempfile = "3"
+rand.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
