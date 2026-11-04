@@ -10,6 +10,7 @@ pub mod connection;
 pub mod environment;
 pub mod keystore;
 pub mod runner;
+pub mod runners;
 pub mod selfcheck;
 pub mod state;
 pub mod supervisor;
