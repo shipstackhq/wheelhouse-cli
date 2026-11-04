@@ -3,6 +3,7 @@
 
 pub mod cancel;
 pub mod capabilities;
+pub mod chat;
 pub mod claude;
 pub mod config;
 pub mod connection;

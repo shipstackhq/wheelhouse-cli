@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_RUNNER } from "../../daemon/src/config.mjs";
+import { chatArgs, chatParser, chatRules } from "../../daemon/src/runner/chat.mjs";
 import { buildPrompt, claudeArgs, eventsFrom, isRateLimited, scrub, SHELL_RULES, toolSummary } from "../../daemon/src/runner/claude.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -92,6 +93,41 @@ const cases = {
     '{"type":"user"}',
   ].map((line) => ({ line, events: eventsFrom(line) })),
   isRateLimited: ["usage limit reached", "HTTP 429", "all good", "Overloaded"].map((s) => ({ input: s, output: isRateLimited(s) })),
+};
+
+// Chat: the arguments and rules for several messages and checkouts, and one parser fed a whole stream (it keeps state between lines).
+const chatMessage = { messageId: "m", threadId: "t", model: "opus", sessionId: null, prompt: "Where is auth?\nAnd the tests?", repository };
+const chatAt = { commit: "abc1234", branches: ["origin/main", "origin/staging"] };
+const chatMessages = {
+  plain: chatMessage,
+  resumed: { ...chatMessage, sessionId: "s9" },
+  read: { ...chatMessage, mcp: { token: "t0k" } },
+  write: { ...chatMessage, mcp: { token: "t0k", write: true } },
+  noRepoFullName: { ...chatMessage, repository: { name: "app", defaultBranch: "develop" } },
+};
+const chatLines = [
+  '{"type":"system","subtype":"init"}',
+  '{"type":"stream_event","event":{"type":"message_start"}}',
+  '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hel"}}}',
+  '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{"}}}',
+  '{"type":"assistant","message":{"content":[{"type":"text","text":"Hello"},{"type":"tool_use","name":"Read","input":{"file_path":"/Users/example/a.ts"}},{"type":"tool_use","name":"mcp__wheelhouse__get_issue","input":{"ref":"WH-42"}}]}}',
+  "garbage",
+  '{"type":"result","is_error":false,"session_id":"s1","total_cost_usd":0.03,"result":"Hello"}',
+  '{"type":"result","is_error":true,"result":null}',
+];
+const parse = chatParser();
+cases.chat = {
+  messages: chatMessages,
+  checkout: chatAt,
+  checkoutBare: { commit: "def5678", branches: [] },
+  args: {
+    ...Object.fromEntries(Object.entries(chatMessages).map(([k, m]) => [k, chatArgs(m, chatAt, undefined)])),
+    withConfig: chatArgs(chatMessages.read, chatAt, "/tmp/wh-mcp/mcp.json"),
+    writeWithConfig: chatArgs(chatMessages.write, chatAt, "/tmp/wh-mcp/mcp.json"),
+    bareCheckout: chatArgs(chatMessages.plain, { commit: "def5678", branches: [] }, undefined),
+  },
+  rules: { none: chatRules(repository, chatAt), read: chatRules(repository, chatAt, true), write: chatRules(repository, chatAt, true, true) },
+  parser: { lines: chatLines, events: chatLines.map((l) => parse(l)) },
 };
 
 fs.mkdirSync(path.dirname(out), { recursive: true });

@@ -12,12 +12,12 @@ use std::sync::OnceLock;
 static NULL: Value = Value::Null;
 
 /// Field of an object, or null when absent (as JavaScript's undefined reads).
-fn get<'a>(v: &'a Value, key: &str) -> &'a Value {
+pub(crate) fn get<'a>(v: &'a Value, key: &str) -> &'a Value {
     v.get(key).unwrap_or(&NULL)
 }
 
 /// JavaScript truthiness.
-fn truthy(v: &Value) -> bool {
+pub(crate) fn truthy(v: &Value) -> bool {
     match v {
         Value::Null => false,
         Value::Bool(b) => *b,

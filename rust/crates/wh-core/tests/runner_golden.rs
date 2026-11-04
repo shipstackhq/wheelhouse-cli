@@ -3,10 +3,12 @@
 
 use serde_json::Value;
 use std::path::PathBuf;
+use wh_core::chat::{chat_args, chat_parser, chat_rules};
 use wh_core::config::default_runner;
 use wh_core::runner::{
     build_prompt, claude_args, events_from, is_rate_limited, scrub, tool_summary, SHELL_RULES,
 };
+use wh_core::workspace::ChatWorktree;
 
 const HOME: &str = "/Users/example";
 
@@ -130,5 +132,79 @@ fn rate_limit_detection_matches_node() {
             "{}",
             c["input"]
         );
+    }
+}
+
+fn checkout(v: &Value) -> ChatWorktree {
+    ChatWorktree {
+        dir: std::path::PathBuf::new(),
+        commit: v["commit"].as_str().unwrap().into(),
+        branches: str_vec(&v["branches"]),
+    }
+}
+
+#[test]
+fn chat_arguments_match_node() {
+    let g = golden();
+    let c = &g["chat"];
+    let at = checkout(&c["checkout"]);
+    let msgs = &c["messages"];
+    for name in ["plain", "resumed", "read", "write", "noRepoFullName"] {
+        assert_eq!(
+            chat_args(&msgs[name], &at, None),
+            str_vec(&c["args"][name]),
+            "chat args for {name}"
+        );
+    }
+    let mcp = Some("/tmp/wh-mcp/mcp.json");
+    assert_eq!(
+        chat_args(&msgs["read"], &at, mcp),
+        str_vec(&c["args"]["withConfig"])
+    );
+    assert_eq!(
+        chat_args(&msgs["write"], &at, mcp),
+        str_vec(&c["args"]["writeWithConfig"])
+    );
+    assert_eq!(
+        chat_args(&msgs["plain"], &checkout(&c["checkoutBare"]), None),
+        str_vec(&c["args"]["bareCheckout"])
+    );
+}
+
+#[test]
+fn chat_rules_match_node() {
+    let g = golden();
+    let c = &g["chat"];
+    let at = checkout(&c["checkout"]);
+    let repo = &c["messages"]["plain"]["repository"];
+    for (name, wh, write) in [
+        ("none", false, false),
+        ("read", true, false),
+        ("write", true, true),
+    ] {
+        assert_eq!(
+            chat_rules(repo, &at, wh, write),
+            c["rules"][name].as_str().unwrap(),
+            "chat rules {name}"
+        );
+    }
+}
+
+#[test]
+fn chat_parser_matches_node() {
+    let g = golden();
+    let p = &g["chat"]["parser"];
+    let mut parse = chat_parser(HOME.into());
+    for (line, want) in p["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(p["events"].as_array().unwrap())
+    {
+        let got: Vec<Value> = parse(line.as_str().unwrap())
+            .into_iter()
+            .map(|e| serde_json::json!({ "type": e.kind, "data": e.data }))
+            .collect();
+        assert_eq!(&Value::Array(got), want, "events for {line}");
     }
 }
