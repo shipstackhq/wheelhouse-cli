@@ -175,3 +175,19 @@ Every test case in `daemon/test` and `cli/test`, with the Rust test that replace
 |---|---|
 | the output level follows the terminal | - |
 | the header is one plain line for scripts and one short line on a narrow terminal | - |
+
+## End-to-end harness (WH-3 acceptance): `crates/wh-core/tests/e2e.rs`
+The real daemon against a mock Wheelhouse that sends signed offers, a local bare git remote and a fake `claude`. Unix only (it uses `/bin/sh` scripts); there is no Node counterpart, so this is new coverage.
+
+| Scenario | Test |
+|---|---|
+| accept, run, check in, push, report, remove the worktree | `a_job_is_accepted_run_checked_in_pushed_and_reported_and_its_worktree_goes` |
+| checks fix loop: a failed check goes back to the agent and the fix is pushed | `a_failed_check_goes_back_to_the_agent_and_the_fix_is_what_gets_pushed` |
+| checks that never pass: two fixes, then failed, work still pushed | `a_check_that_never_passes_fails_the_job_after_two_fixes_but_the_work_is_still_pushed` |
+| cancel stops the agent and its child | `a_cancel_stops_the_agent_and_its_child_and_the_job_is_reported_canceled` |
+| supersede: nothing pushed, worktree kept | `a_superseded_run_pushes_nothing_and_keeps_its_worktree` |
+| rate-limit pause for jobs and chats | `a_run_that_hits_the_usage_limit_pauses_new_offers_and_chats` |
+| chat answer in the thread worktree | `a_chat_message_is_answered_in_its_thread_worktree_with_deltas_and_the_session` |
+| restart recovery | `a_job_that_was_running_when_the_daemon_stopped_is_reported_failed_after_the_restart` |
+| offline finish replay, across a restart | `a_finish_that_could_not_be_sent_is_kept_and_sent_when_wheelhouse_is_back_even_after_a_restart` |
+| untrusted offers ignored; stop while running reports the daemon going down | `offers_that_are_not_trustworthy_are_ignored_and_a_stop_while_running_reports_the_daemon_going_down` |

@@ -153,6 +153,8 @@ pub struct DaemonOptions {
     pub heartbeat: Duration,
     /// Skip widening PATH to the user's login shell (tests keep their own).
     pub adopt_path: bool,
+    /// The wait before the first retry of a finish that did not get through (1s by default; tests make it short).
+    pub finish_retry: Option<Duration>,
 }
 
 impl DaemonOptions {
@@ -163,6 +165,7 @@ impl DaemonOptions {
             log,
             heartbeat: HEARTBEAT,
             adopt_path: true,
+            finish_retry: None,
         }
     }
 }
@@ -182,6 +185,7 @@ pub async fn run_daemon(opts: DaemonOptions) -> Result<Exit, String> {
         log,
         heartbeat,
         adopt_path,
+        finish_retry,
     } = opts;
     let config = load_config(&p);
     let (Some(device_id), Some(server), Some(server_key)) = (
@@ -253,7 +257,7 @@ pub async fn run_daemon(opts: DaemonOptions) -> Result<Exit, String> {
             home,
         },
         log: log.clone(),
-        finish_retry: None,
+        finish_retry,
     });
     {
         let p = p.clone();
