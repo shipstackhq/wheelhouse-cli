@@ -1,0 +1,16 @@
+[package]
+name = "wh-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+base64.workspace = true
+ed25519-dalek.workspace = true
+rand.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+proptest = "1"

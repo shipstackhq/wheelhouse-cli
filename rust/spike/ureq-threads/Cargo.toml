@@ -1,0 +1,17 @@
+[package]
+name = "spike-ureq-threads"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+wh-proto = { path = "../../crates/wh-proto" }
+ureq = { version = "3", features = ["platform-verifier", "json"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

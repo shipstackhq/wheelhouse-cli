@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent for the Wheelhouse agent daemon, Rust build. It has the same label as the Node one, so installing either replaces the other.
+  install.sh fills in the path of the wheelhouse-daemon binary (started as `wheelhouse-daemon run`), the user's home directory (the
+  daemon's state lives under ~/.wheelhouse) and the log directory. It is an agent (per user, in the login session), not a daemon
+  (system-wide): see ../README.md.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.shipstack.wheelhouse-daemon</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__BIN__</string>
+    <string>run</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__HOME__</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart it when it fails. A clean exit (the device was unpaired) stays stopped. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <!-- Throttle restarts so a crash loop does not spin the CPU. -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>__LOGDIR__/wheelhouse-daemon.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOGDIR__/wheelhouse-daemon.err.log</string>
+</dict>
+</plist>

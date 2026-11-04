@@ -1,0 +1,18 @@
+[package]
+name = "wheelhouse"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wheelhouse"
+path = "src/main.rs"
+
+# The daemon commands under their own name, for the LaunchAgent and for scripts (`wheelhouse-daemon run`).
+[[bin]]
+name = "wheelhouse-daemon"
+path = "src/bin/wheelhouse-daemon.rs"
+
+[dependencies]
+wh-core = { path = "../wh-core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

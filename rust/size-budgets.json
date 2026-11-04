@@ -1,0 +1,7 @@
+{
+  "_comment": "Maximum release size in bytes per artifact (file name without extension), the same budget on every platform. The gate fails when one is exceeded or missing. wheelhouse and wheelhouse-daemon were measured with the daemon in WH-3 at 2,702,656 bytes (macOS arm64) and 3,219,968 bytes (Windows x86_64), the larger of which + ~10% is the budget. The spikes are still placeholders.",
+  "wheelhouse": 3550000,
+  "wheelhouse-daemon": 3550000,
+  "spike-tokio-reqwest": 8388608,
+  "spike-ureq-threads": 6291456
+}
