@@ -46,16 +46,16 @@ Every test case in `daemon/test` and `cli/test`, with the Rust test that replace
 | the prompt carries the issue and the rules of the run | wh-core `tests/runner_golden.rs::prompts_match_node` (`plain`) |
 | a continuation tells the agent about the earlier attempt and that the branch already has its commits | wh-core `tests/runner_golden.rs::prompts_match_node` (`continuation*`) |
 | the run is headless and fenced: restricted, no MCP, no hooks, prompts refused, push denied | wh-core `tests/runner_golden.rs::claude_arguments_match_node` (`plain`); the spawn-time checks come with the runner process |
-| a run with a key reads Wheelhouse through a private MCP config file that is gone afterwards | partial: `wh-core `tests/runner_golden.rs::claude_arguments_match_node` (`mcp`) covers the flags; the 0600 temp file is not ported yet |
+| a run with a key reads Wheelhouse through a private MCP config file that is gone afterwards | wh-core `claude::tests::a_run_with_a_key_reads_wheelhouse_through_a_private_mcp_config_file_that_is_gone_afterwards` (the flags are also covered by `tests/runner_golden.rs::claude_arguments_match_node`) |
 | a delegated run uses its agent's definition, and is told to check done and ask | wh-core `tests/runner_golden.rs::claude_arguments_match_node` (`effortAndAgent`) and `prompts_match_node` (`agent`) |
 | an answered question is handed to the continuing run | wh-core `tests/runner_golden.rs::prompts_match_node` (`continuationAnswered`) |
 | the offer's effort is passed to Claude, and left out when there is none | wh-core `tests/runner_golden.rs::claude_arguments_match_node` (`effortAndAgent`, `plain`) |
 | a review reads the pull request, may not edit, and is told to give a verdict | wh-core `tests/runner_golden.rs::prompts_match_node` (`review`) and `claude_arguments_match_node` (`review`) |
 | a delegated run is asked for learnings; LEARNING lines leave the summary and become a list | wh-core `tests/runner_golden.rs::stream_lines_match_node` (learnings) and `prompts_match_node` (`agent`) |
 | stream-json becomes short progress events | wh-core `tests/runner_golden.rs::stream_lines_match_node` |
-| runs the CLI in the worktree and reports its result | - |
-| an abort stops the agent and its children | - |
-| a missing CLI is a clear failure | - |
+| runs the CLI in the worktree and reports its result | wh-core `claude::tests::runs_the_cli_in_the_worktree_and_reports_its_result` |
+| an abort stops the agent and its children | wh-core `claude::tests::an_abort_stops_the_agent_and_its_children` (also checks the agent's child process is gone) |
+| a missing CLI is a clear failure | wh-core `claude::tests::a_missing_cli_is_a_clear_failure` |
 | a chat run is read-only: file tools and read-only git, no MCP, no hooks, partial messages, the prompt as typed | - |
 | the chat parser: text deltas, tool calls, and the result; the full text only when no deltas came | - |
 | runs a chat message and reports deltas, tools and the whole answer; an abort stops it | - |

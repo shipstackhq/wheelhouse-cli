@@ -1696,6 +1696,7 @@ name = "wh-core"
 version = "0.0.0"
 dependencies = [
  "ed25519-dalek",
+ "libc",
  "regex",
  "reqwest",
  "serde_json",

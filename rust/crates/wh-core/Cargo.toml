@@ -11,9 +11,12 @@ tokio = { version = "1", features = ["process", "time", "sync", "rt", "macros", 
 wh-proto = { path = "../wh-proto" }
 wh-platform = { path = "../wh-platform" }
 ed25519-dalek.workspace = true
+tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"] }
 
 [dev-dependencies]
-tempfile = "3"
 wh-proto = { path = "../wh-proto" }
 serde_json = { workspace = true, features = ["preserve_order"] }
