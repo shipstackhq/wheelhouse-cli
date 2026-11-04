@@ -22,6 +22,17 @@ macOS:
 ```sh
 sh daemon/platform/macos/install.sh --entry /path/to/daemon/src/main.mjs --dry-run
 sh daemon/platform/macos/install.sh --entry /path/to/daemon/src/main.mjs
+```
+
+The Rust daemon uses the same label. Install it with `--bin` and it replaces the Node one; install with `--entry` to go back. Pairing and the Keychain key are shared, so nothing is paired again:
+
+```sh
+sh daemon/platform/macos/install.sh --bin /path/to/wheelhouse-daemon
+```
+
+Remove either one:
+
+```sh
 sh daemon/platform/macos/uninstall.sh
 ```
 

@@ -1,6 +1,7 @@
 {
-  "_comment": "Maximum release size in bytes per artifact (file name without extension). The gate fails when one is exceeded or missing. Placeholders until the first CI run reports real sizes: tighten to measured size + ~10%.",
-  "wheelhouse": 2097152,
+  "_comment": "Maximum release size in bytes per artifact (file name without extension). The gate fails when one is exceeded or missing. wheelhouse and wheelhouse-daemon were measured at 2,702,656 bytes (macOS arm64, release) with the daemon in WH-3, budget is that + ~10%. The spikes are still placeholders.",
+  "wheelhouse": 3000000,
+  "wheelhouse-daemon": 3000000,
   "spike-tokio-reqwest": 8388608,
   "spike-ureq-threads": 6291456
 }

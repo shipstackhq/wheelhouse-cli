@@ -8,6 +8,7 @@ pub mod claude;
 pub mod config;
 pub mod connection;
 pub mod daemon;
+pub mod daemon_cli;
 pub mod environment;
 pub mod keystore;
 pub mod runner;

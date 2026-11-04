@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 serde_json = { workspace = true, features = ["preserve_order"] }
 regex = "1"
-tokio = { version = "1", features = ["process", "time", "sync", "rt", "macros", "net", "io-util"] }
+tokio = { version = "1", features = ["process", "time", "sync", "rt", "macros", "net", "io-util", "signal"] }
 wh-proto = { path = "../wh-proto" }
 wh-platform = { path = "../wh-platform" }
 ed25519-dalek.workspace = true
