@@ -56,14 +56,14 @@ Every test case in `daemon/test` and `cli/test`, with the Rust test that replace
 | runs the CLI in the worktree and reports its result | wh-core `claude::tests::runs_the_cli_in_the_worktree_and_reports_its_result` |
 | an abort stops the agent and its children | wh-core `claude::tests::an_abort_stops_the_agent_and_its_children` (also checks the agent's child process is gone) |
 | a missing CLI is a clear failure | wh-core `claude::tests::a_missing_cli_is_a_clear_failure` |
-| a chat run is read-only: file tools and read-only git, no MCP, no hooks, partial messages, the prompt as typed | - |
-| the chat parser: text deltas, tool calls, and the result; the full text only when no deltas came | - |
-| runs a chat message and reports deltas, tools and the whole answer; an abort stops it | - |
-| chat with a key: MCP config in a 0600 file (not argv), strict config kept, mcp__wheelhouse allowed, rules switch; without one, none of it | - |
-| chat rules offer Wheelhouse writes only when mcp.write is true | - |
-| write tool summaries: create_issue shows the title, comment the issue | - |
+| a chat run is read-only: file tools and read-only git, no MCP, no hooks, partial messages, the prompt as typed | wh-core `chat::tests::a_chat_run_is_read_only_file_tools_and_read_only_git_no_mcp_no_hooks_partial_messages_the_prompt_as_typed` (and the golden `chat_arguments_match_node`) |
+| the chat parser: text deltas, tool calls, and the result; the full text only when no deltas came | wh-core `chat::tests::the_chat_parser_text_deltas_tool_calls_and_the_result_the_full_text_only_when_no_deltas_came` (and the golden `chat_parser_matches_node`) |
+| runs a chat message and reports deltas, tools and the whole answer; an abort stops it | wh-core `chat::tests::process::runs_a_chat_message_and_reports_deltas_tools_and_the_whole_answer_an_abort_stops_it` |
+| chat with a key: MCP config in a 0600 file (not argv), strict config kept, mcp__wheelhouse allowed, rules switch; without one, none of it | wh-core `chat::tests::chat_with_a_key_strict_config_kept_mcp_wheelhouse_allowed_rules_switch_without_one_none_of_it` (and the golden `chat_arguments_match_node`, `chat_rules_match_node`) |
+| chat rules offer Wheelhouse writes only when mcp.write is true | wh-core `chat::tests::chat_rules_offer_wheelhouse_writes_only_when_mcp_write_is_true` (and the golden `chat_rules_match_node`) |
+| write tool summaries: create_issue shows the title, comment the issue | wh-core `chat::tests::write_tool_summaries_create_issue_shows_the_title_comment_the_issue` |
 | the MCP tool summary is short: 'wheelhouse: get_issue WH-42' | wh-core `tests/runner_golden.rs::tool_summaries_match_node` (`mcp`) |
-| a keyed chat run writes the config 0600 outside cwd, keeps the token out of argv and events, and deletes it after | - |
+| a keyed chat run writes the config 0600 outside cwd, keeps the token out of argv and events, and deletes it after | wh-core `chat::tests::process::a_keyed_chat_run_writes_the_config_0600_outside_cwd_keeps_the_token_out_of_argv_and_events_and_deletes_it_after` |
 | scrub: paths read relative to the run's checkout, the rest of home as ~ | wh-core `tests/runner_golden.rs::scrub_matches_node` |
 
 ## daemon/test/supervisor.test.mjs
