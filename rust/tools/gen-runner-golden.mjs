@@ -2,8 +2,10 @@
 // The Rust tests in crates/wh-core compare their output with these, byte for byte.
 // Usage: node rust/tools/gen-runner-golden.mjs   (CI runs it before the Rust tests; the output is not committed)
 
-// The output must not depend on the machine: paths are scrubbed against a fixed home, which os.homedir() reads from HOME.
+// The output must not depend on the machine: paths are scrubbed against a fixed home, which os.homedir() reads from HOME
+// (USERPROFILE on Windows).
 process.env.HOME = "/Users/example";
+process.env.USERPROFILE = "/Users/example";
 
 import fs from "node:fs";
 import path from "node:path";
